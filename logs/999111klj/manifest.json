@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "team_id": "contest2026_312_zheyangpaiduibudui",
+  "github_login": "999111klj",
+  "generator": "manual",
+  "sessions": [
+    {
+      "session_id": "sess_514a9507-ede6-4ca8-a30e-e2141eaabc60",
+      "tool": "kiro",
+      "started_at": "2026-09-14T06:43:37.789Z",
+      "last_event_at": "2026-09-16T03:31:26.435Z",
+      "event_count": 1552,
+      "file_path": "logs/999111klj/2026-09-14/kiro__sess_514a9507-ede6-4ca8-a30e-e2141eaabc60.jsonl",
+      "collection_mode": "manual",
+      "health": "ok"
+    }
+  ],
+  "updated_at": "2026-09-16T03:31:26.435000+00:00"
+}
