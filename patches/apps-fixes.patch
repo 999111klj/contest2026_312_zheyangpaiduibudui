@@ -1,0 +1,265 @@
+diff --git a/crypto/mbedtls/Make.defs b/crypto/mbedtls/Make.defs
+index 3cb722d52..72dc8e4f5 100644
+--- a/crypto/mbedtls/Make.defs
++++ b/crypto/mbedtls/Make.defs
+@@ -23,10 +23,10 @@ CONFIGURED_APPS += $(APPDIR)/crypto/mbedtls
+ 
+ # Allows `<mbedtls/<>.h>` import.
+ 
+-CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/crypto/mbedtls/include
+-CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/crypto/mbedtls/mbedtls/include
++CFLAGS += -isystem $(APPDIR)/crypto/mbedtls/include
++CFLAGS += -isystem $(APPDIR)/crypto/mbedtls/mbedtls/include
+ 
+-CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/crypto/mbedtls/include
+-CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/crypto/mbedtls/mbedtls/include
++CXXFLAGS += -isystem $(APPDIR)/crypto/mbedtls/include
++CXXFLAGS += -isystem $(APPDIR)/crypto/mbedtls/mbedtls/include
+ 
+ endif
+diff --git a/examples/camera/Kconfig b/examples/camera/Kconfig
+index 4c29ed082..acca26d20 100644
+--- a/examples/camera/Kconfig
++++ b/examples/camera/Kconfig
+@@ -19,6 +19,12 @@ config EXAMPLES_CAMERA_PROGNAME
+ 		This is the name of the program that will be use when the NSH ELF
+ 		program is installed.
+ 
++config EXAMPLES_CAMERA_DEVPATH
++	string "Camera device path"
++	default "/dev/video"
++	---help---
++		Path to the V4L2 camera capture device.
++
+ config EXAMPLES_CAMERA_PRIORITY
+ 	int "Camera task priority"
+ 	default 100
+diff --git a/examples/camera/camera_bkgd.c b/examples/camera/camera_bkgd.c
+index f82a80e9e..c422044f0 100644
+--- a/examples/camera/camera_bkgd.c
++++ b/examples/camera/camera_bkgd.c
+@@ -24,6 +24,8 @@
+ 
+ #include <nuttx/config.h>
+ 
++#include <sys/boardctl.h>
++
+ #include <stdint.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+@@ -295,7 +297,7 @@ int nximage_initialize(void)
+  * Name: nximage_draw
+  *
+  * Description:
+- *   Put the NuttX logo in the center of the display.
++ *   Center-crop and draw an RGB image on the background window.
+  *
+  ****************************************************************************/
+ 
+@@ -304,25 +306,41 @@ void nximage_draw(FAR void *image, int w, int h)
+   FAR struct nxgl_point_s origin;
+   FAR struct nxgl_rect_s dest;
+   FAR const void *src[CONFIG_NX_NPLANES];
++  nxgl_coord_t copy_w;
++  nxgl_coord_t copy_h;
++  nxgl_coord_t src_x;
++  nxgl_coord_t src_y;
+   int ret;
+ 
+-  origin.x = 0;
+-  origin.y = 0;
++  if (image == NULL || w <= 0 || h <= 0)
++    {
++      return;
++    }
++
++  /* Center-crop images larger than the LCD and center images that are
++   * smaller.  NX expects origin to describe the full source bitmap in
++   * window coordinates, while stride remains the full source row width.
++   */
+ 
+-  /* Set up the destination to whole LCD screen */
++  copy_w = w < g_nximage.xres ? w : g_nximage.xres;
++  copy_h = h < g_nximage.yres ? h : g_nximage.yres;
++  src_x = (w - copy_w) / 2;
++  src_y = (h - copy_h) / 2;
+ 
+-  dest.pt1.x = 0;
+-  dest.pt1.y = 0;
+-  dest.pt2.x = g_nximage.xres - 1;
+-  dest.pt2.y = g_nximage.yres - 1;
++  dest.pt1.x = (g_nximage.xres - copy_w) / 2;
++  dest.pt1.y = (g_nximage.yres - copy_h) / 2;
++  dest.pt2.x = dest.pt1.x + copy_w - 1;
++  dest.pt2.y = dest.pt1.y + copy_h - 1;
+ 
++  origin.x = dest.pt1.x - src_x;
++  origin.y = dest.pt1.y - src_y;
+   src[0] = image;
+ 
+   ret = nx_bitmap(g_nximage.hbkgd, &dest, src, &origin,
+-                  g_nximage.xres * sizeof(nxgl_mxpixel_t));
++                  w * sizeof(nxgl_mxpixel_t));
+   if (ret < 0)
+     {
+-      printf("nximage_image: nx_bitmap failed: %d\n", errno);
++      printf("nximage_draw: nx_bitmap failed: %d\n", errno);
+     }
+ }
+ 
+diff --git a/examples/camera/camera_main.c b/examples/camera/camera_main.c
+index a5977e714..857290faf 100644
+--- a/examples/camera/camera_main.c
++++ b/examples/camera/camera_main.c
+@@ -25,6 +25,7 @@
+ #include <nuttx/config.h>
+ 
+ #include <stdio.h>
++#include <stdbool.h>
+ #include <string.h>
+ #include <stdlib.h>
+ #include <errno.h>
+@@ -60,7 +61,7 @@
+ #define APP_STATE_UNDER_CAPTURE   (1)
+ #define APP_STATE_AFTER_CAPTURE   (2)
+ 
+-#define CAMERA_DEV_PATH "/dev/video"
++#define CAMERA_DEV_PATH CONFIG_EXAMPLES_CAMERA_DEVPATH
+ 
+ /****************************************************************************
+  * Private Types
+@@ -457,6 +458,7 @@ int main(int argc, FAR char *argv[])
+ {
+   int ret;
+   int v_fd;
++  bool initialized_driver = false;
+   int capture_num = DEFAULT_CAPTURE_NUM;
+   enum v4l2_buf_type capture_type = V4L2_BUF_TYPE_STILL_CAPTURE;
+   struct v4l2_buffer v4l2_buf;
+@@ -501,21 +503,30 @@ int main(int argc, FAR char *argv[])
+ 
+   save_dir = futil_initialize();
+ 
+-  /* Initialize video driver to create a device file */
++  /* Open the board-provided device first.  Some boards register their
++   * capture device during bring-up, while others leave registration to
++   * this example.
++   */
+ 
+-  ret = capture_initialize(CAMERA_DEV_PATH);
+-  if (ret != 0)
++  v_fd = open(CAMERA_DEV_PATH, 0);
++  if (v_fd < 0 && errno == ENOENT)
+     {
+-      printf("ERROR: Failed to initialize video: errno = %d\n", errno);
+-      goto exit_without_cleaning_videodriver;
+-    }
++      ret = capture_initialize(CAMERA_DEV_PATH);
++      if (ret != OK)
++        {
++          printf("ERROR: Failed to initialize %s: errno = %d\n",
++                 CAMERA_DEV_PATH, errno);
++          goto exit_without_cleaning_videodriver;
++        }
+ 
+-  /* Open the device file. */
++      initialized_driver = true;
++      v_fd = open(CAMERA_DEV_PATH, 0);
++    }
+ 
+-  v_fd = open(CAMERA_DEV_PATH, 0);
+   if (v_fd < 0)
+     {
+-      printf("ERROR: Failed to open video.errno = %d\n", errno);
++      printf("ERROR: Failed to open %s: errno = %d\n",
++             CAMERA_DEV_PATH, errno);
+       ret = ERROR;
+       goto exit_without_cleaning_buffer;
+     }
+@@ -761,7 +772,10 @@ exit_this_app:
+   free_buffer(buffers_still, STILL_BUFNUM);
+ 
+ exit_without_cleaning_buffer:
+-  capture_uninitialize(CAMERA_DEV_PATH);
++  if (initialized_driver)
++    {
++      capture_uninitialize(CAMERA_DEV_PATH);
++    }
+ 
+ exit_without_cleaning_videodriver:
+ #ifdef CONFIG_EXAMPLES_CAMERA_OUTPUT_LCD
+diff --git a/nshlib/nsh_init.c b/nshlib/nsh_init.c
+index 5904269e4..72d8b7764 100644
+--- a/nshlib/nsh_init.c
++++ b/nshlib/nsh_init.c
+@@ -33,6 +33,13 @@
+ #include "nsh.h"
+ #include "nsh_console.h"
+ 
++#ifdef CONFIG_ARCH_CHIP_ESP32S3
++extern int ets_printf(const char *fmt, ...);
++#  define nshdiag(s) ets_printf("[bootdiag] %s\n", s)
++#else
++#  define nshdiag(s)
++#endif
++
+ #ifdef CONFIG_NSH_NETINIT
+ #  include "netutils/netinit.h"
+ #endif
+@@ -110,6 +117,8 @@ void nsh_initialize(void)
+   FAR struct console_stdio_s *pstate;
+ #endif
+ 
++  nshdiag("N0 nsh_initialize entered");
++
+   /* populate NSH prompt string */
+ 
+   nsh_update_prompt();
+@@ -144,7 +153,9 @@ void nsh_initialize(void)
+ #ifdef CONFIG_NSH_ARCHINIT
+   /* Perform architecture-specific initialization (if configured) */
+ 
++  nshdiag("N1 boardctl begin");
+   boardctl(BOARDIOC_INIT, 0);
++  nshdiag("N2 boardctl complete");
+ #endif
+ 
+ #if defined(CONFIG_ETC_ROMFS) && !defined(CONFIG_NSH_DISABLESCRIPT)
+@@ -158,7 +169,9 @@ void nsh_initialize(void)
+ #ifdef CONFIG_NSH_NETINIT
+   /* Bring up the network */
+ 
++  nshdiag("N3 netinit begin");
+   netinit_bringup();
++  nshdiag("N4 netinit complete");
+ #endif
+ 
+ #if defined(CONFIG_NSH_ARCHINIT) && defined(CONFIG_BOARDCTL_FINALINIT)
+diff --git a/wireless/wapi/src/driver_wext.c b/wireless/wapi/src/driver_wext.c
+index dc18610fe..d1fc2eecf 100644
+--- a/wireless/wapi/src/driver_wext.c
++++ b/wireless/wapi/src/driver_wext.c
+@@ -170,6 +170,7 @@ int wpa_driver_wext_set_key_ext(int sockfd, FAR const char *ifname,
+       return -ENOMEM;
+     }
+ 
++  memset(ext, 0, sizeof(*ext) + key_len);
+   memset(&iwr, 0, sizeof(iwr));
+   strlcpy(iwr.ifr_name, ifname, IFNAMSIZ);
+ 
+@@ -202,6 +203,7 @@ int wpa_driver_wext_set_key_ext(int sockfd, FAR const char *ifname,
+ 
+       default:
+         nerr("ERROR: Unknown algorithm %d", alg);
++        memset(ext, 0, sizeof(*ext) + key_len);
+         free(ext);
+         return -EINVAL;
+     }
+@@ -212,6 +214,7 @@ int wpa_driver_wext_set_key_ext(int sockfd, FAR const char *ifname,
+       nerr("ERROR: ioctl[SIOCSIWENCODEEXT]: %d", errno);
+     }
+ 
++  memset(ext, 0, sizeof(*ext) + key_len);
+   free(ext);
+   return ret;
+ }
