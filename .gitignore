@@ -1,0 +1,20 @@
+# 编译产物
+build/
+out/
+*.o
+*.a
+*.elf
+*.hex
+*.map
+*.built
+Make.dep
+*.home.mi*
+
+# 云端服务本地配置（含密钥，绝不入库）
+cloud/**/server.env
+cloud/**/venv/
+cloud/**/data/
+__pycache__/
+*.pyc
+
+# 注意：logs/ 下导出的 AI Coding 日志必须提交，不要忽略
