@@ -1,0 +1,199 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config EXAMPLES_CAMERA_GALLERY
+	tristate "Camera gallery application"
+	default n
+	depends on DRIVERS_VIDEO && NX && INPUT_BUTTONS && FS_FAT
+	---help---
+		Enable the single-threaded V4L2 camera and BMP gallery application.
+
+if EXAMPLES_CAMERA_GALLERY
+
+config EXAMPLES_CAMERA_GALLERY_PROGNAME
+	string "Program name"
+	default "camera_gallery"
+
+config EXAMPLES_CAMERA_GALLERY_DEVPATH
+	string "Camera device path"
+	default "/dev/video0"
+
+config EXAMPLES_CAMERA_GALLERY_BUTTONS_DEVPATH
+	string "Buttons device path"
+	default "/dev/buttons"
+
+config EXAMPLES_CAMERA_GALLERY_ADC_BUTTONS
+	bool "Enable ESP32-S3-EYE ADC resistor-ladder buttons"
+	default n
+	depends on ADC
+	---help---
+		Read the MENU, PLAY, DOWN and UP buttons from an ADC device and
+		combine them with the GPIO BOOT button input.
+
+config EXAMPLES_CAMERA_GALLERY_ADC_DEVPATH
+	string "ADC buttons device path"
+	default "/dev/adc0"
+	depends on EXAMPLES_CAMERA_GALLERY_ADC_BUTTONS
+
+config EXAMPLES_CAMERA_GALLERY_ADC_MONITOR
+	bool "Run ADC button voltage monitor"
+	default n
+	depends on EXAMPLES_CAMERA_GALLERY_ADC_BUTTONS
+	---help---
+		Start a dedicated diagnostic screen instead of the camera gallery.
+		The screen and serial console continuously show ADC1 channel 0 in
+		millivolts so the resistor-ladder button levels can be measured.
+
+config EXAMPLES_CAMERA_GALLERY_SD_DEVPATH
+	string "SD block device path"
+	default "/dev/mmcsd1"
+
+config EXAMPLES_CAMERA_GALLERY_SD_MOUNTPOINT
+	string "SD mount point"
+	default "/mnt/sd"
+
+config EXAMPLES_CAMERA_GALLERY_PRIORITY
+	int "Camera gallery task priority"
+	default 100
+
+config EXAMPLES_CAMERA_GALLERY_STACKSIZE
+	int "Camera gallery stack size"
+	default 12288
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG
+	bool "Enable embedded NIMA AI Vlog scoring"
+	default n
+	depends on TFLITEMICRO
+	---help---
+		Add an AI VLOG home-page entry with live camera preview and
+		continuous embedded INT8 TFLite NIMA scoring.  PLAY saves the
+		current frame to the SD card and MENU returns home.  The separate
+		aivlog_score_sd command remains available to score every
+		IMG_NNNN.BMP file in the SD card DCIM directory.
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_ARENA_SIZE
+	int "AI Vlog TFLite tensor arena size"
+	default 524288
+	range 262144 4194304
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_STACKSIZE
+	int "AI Vlog live scoring worker stack size"
+	default 16384
+	range 8192 65536
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_PRIORITY
+	int "AI Vlog live scoring worker priority"
+	default 90
+	range 1 254
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG
+	---help---
+		Keep this below EXAMPLES_CAMERA_GALLERY_PRIORITY so camera capture
+		and display remain responsive while inference runs.
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_INTERVAL_MS
+	int "AI Vlog minimum scoring interval (milliseconds)"
+	default 800
+	range 0 10000
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG
+	---help---
+		Minimum time between accepted live camera snapshots.  A value of
+		zero submits a new snapshot as soon as the worker becomes idle.
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+	bool "Queue high-score AI Vlog frames for cloud generation"
+	default n
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG
+	depends on EXAMPLES_CAMERA_GALLERY_CLOUD_SCORE
+	---help---
+		Persist selected high-score frames and an atomic session manifest on
+		the SD card.  A low-priority worker uploads pending sessions through
+		HTTPS and requests Vlog generation when MENU ends the session.  If no
+		cloud endpoint is configured, frames remain safely queued offline.
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_PROVISION
+	bool "Provision AI Vlog Wi-Fi and cloud endpoint over BLE"
+	default n
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+	depends on AI_AGENT_BLE_GATT
+	depends on NETUTILS_CJSON
+	---help---
+		Expose an encrypted Nordic UART Service RX characteristic for
+		newline-delimited JSON provisioning of Wi-Fi and the AI Vlog cloud
+		endpoint.  The ESP32-S3 advertises as AIVLOG-S3.
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_THRESHOLD
+	int "AI Vlog automatic capture threshold (0-100)"
+	default 85
+	range 0 100
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_COOLDOWN_MS
+	int "Minimum interval between queued frames (milliseconds)"
+	default 5000
+	range 0 600000
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_DHASH_DISTANCE
+	int "Minimum perceptual dHash distance"
+	default 6
+	range 0 64
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_MAX_ASSETS
+	int "Maximum queued assets per session"
+	default 32
+	range 1 256
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_STACKSIZE
+	int "AI Vlog uploader worker stack size"
+	default 24576
+	range 12288 65536
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_PRIORITY
+	int "AI Vlog uploader worker priority"
+	default 70
+	range 1 254
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+	---help---
+		Keep this below the camera and inference priorities so network and SD
+		work cannot make the live preview unresponsive.
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_RETRY_SEC
+	int "Initial cloud retry delay (seconds)"
+	default 5
+	range 1 3600
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_RETRY_MAX_SEC
+	int "Maximum cloud retry delay (seconds)"
+	default 300
+	range 1 86400
+	depends on EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD
+
+config EXAMPLES_CAMERA_GALLERY_CLOUD_SCORE
+	bool "Upload captured photos for MiMo cloud scoring"
+	default n
+	depends on EXAMPLES_AI_AGENT_VELA && CRYPTO_MBEDTLS && NETUTILS_CJSON
+	---help---
+		Encode each saved RGB565 frame as BMP, upload it asynchronously to a
+		configured vision model, and overlay the returned 0-100 score on the
+		LCD.  Configure credentials from NSH with:
+		camera_gallery set_wifi <ssid> <password>
+		camera_gallery set_mimo <api_key>
+
+config EXAMPLES_CAMERA_GALLERY_CLOUD_STACKSIZE
+	int "Cloud scoring worker stack size"
+	default 24576
+	depends on EXAMPLES_CAMERA_GALLERY_CLOUD_SCORE
+
+config EXAMPLES_CAMERA_GALLERY_AUTOSTART
+	bool "Start camera gallery automatically"
+	default n
+
+endif

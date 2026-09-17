@@ -1,0 +1,7 @@
+############################################################################
+# app/camera_gallery/Make.defs (mapped to packages/demos/contest2026_312_camera_gallery)
+############################################################################
+
+ifneq ($(CONFIG_EXAMPLES_CAMERA_GALLERY),)
+CONFIGURED_APPS += $(APPDIR)/packages/demos/contest2026_312_camera_gallery
+endif
