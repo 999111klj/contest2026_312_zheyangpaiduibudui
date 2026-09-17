@@ -9,8 +9,7 @@
   <include name="openvela.xml"/>
 
   <project path="contest2026_312_zheyangpaiduibudui" name="contest2026_312_zheyangpaiduibudui">
-    <linkfile src="app/hello_app" dest="packages/demos/contest2026_312_hello_app"/>
-    <linkfile src="quickapp/hello_quickapp" dest="packages/apps/contest2026_312_hello_quickapp"/>
-    <linkfile src="board/contest_board" dest="vendor/openvela/boards/contest2026_312_board"/>
+    <linkfile src="app/camera_gallery" dest="packages/demos/contest2026_312_camera_gallery"/>
+    <linkfile src="third_party/esp-nn" dest="apps/mlearning/esp-nn"/>
   </project>
 </manifest>

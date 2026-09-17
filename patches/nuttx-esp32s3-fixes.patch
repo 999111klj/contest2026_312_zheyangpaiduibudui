@@ -1,0 +1,1878 @@
+diff --git a/arch/xtensa/src/esp32s3/Kconfig b/arch/xtensa/src/esp32s3/Kconfig
+index 6ce5f143aa8..b14b62b0956 100644
+--- a/arch/xtensa/src/esp32s3/Kconfig
++++ b/arch/xtensa/src/esp32s3/Kconfig
+@@ -775,6 +775,26 @@ config ESP32S3_USBSERIAL
+ 	select OTHER_UART_SERIALDRIVER
+ 	select ARCH_HAVE_SERIAL_TERMIOS
+ 
++config ESP32S3_USBSERIAL_TXBUFSIZE
++	int "USB-Serial software TX buffer size"
++	default 16384
++	range 64 32767
++	depends on ESP32S3_USBSERIAL
++	---help---
++		Size of the serial upper-half transmit ring.  The USB Serial/JTAG
++		endpoint stops draining when no host has the port open.  This ring
++		retains transient output while the host is consuming data.
++
++config ESP32S3_USBSERIAL_TXSTALL_TIMEOUT
++	int "USB-Serial TX stall timeout (milliseconds)"
++	default 1000
++	range 100 60000
++	depends on ESP32S3_USBSERIAL
++	---help---
++		Maximum time a writer waits when the software TX ring is full.  If the
++		USB host does not consume the IN endpoint during that interval, stale
++		buffered output is dropped so console logging cannot stop boot.
++
+ config ESP32S3_OTG
+ 	bool "USB OTG"
+ 	default n
+@@ -1691,8 +1711,23 @@ config ESP32S3_WIFI_DYNAMIC_RXBUF_NUM
+ 	int "Wi-Fi dynamic RX buffer number"
+ 	default 32
+ 
++config ESP32S3_WIFI_STATIC_TXBUF
++	bool "Use static Wi-Fi TX buffers"
++	default n
++	---help---
++		Allocate fixed-size TX buffers during Wi-Fi initialization.  This
++		prevents transient packet-copy allocations from failing when internal
++		heap is fragmented by memory-intensive workloads such as TLS.
++
++config ESP32S3_WIFI_STATIC_TXBUF_NUM
++	int "Wi-Fi static TX buffer number"
++	depends on ESP32S3_WIFI_STATIC_TXBUF
++	range 1 64
++	default 16
++
+ config ESP32S3_WIFI_DYNAMIC_TXBUF_NUM
+ 	int "Wi-Fi dynamic TX buffer number"
++	depends on !ESP32S3_WIFI_STATIC_TXBUF
+ 	default 32
+ 
+ config ESP32S3_WIFI_TX_AMPDU
+diff --git a/arch/xtensa/src/esp32s3/Make.defs b/arch/xtensa/src/esp32s3/Make.defs
+index b340b2232e5..3479765429b 100644
+--- a/arch/xtensa/src/esp32s3/Make.defs
++++ b/arch/xtensa/src/esp32s3/Make.defs
+@@ -267,6 +267,11 @@ ifneq ($(USE_NXTMPDIR_ESP_REPO_DIRECTLY),y)
+ 	$(Q) echo "Espressif HAL for 3rd Party Platforms: ${ESP_HAL_3RDPARTY_VERSION}"
+ 	$(Q) git -C chip/$(ESP_HAL_3RDPARTY_REPO) checkout --quiet $(ESP_HAL_3RDPARTY_VERSION)
+ endif
++	$(Q) if git -C chip/$(ESP_HAL_3RDPARTY_REPO) apply --check \
++		../esp-hal-3rdparty-spinlock.patch; then \
++		git -C chip/$(ESP_HAL_3RDPARTY_REPO) apply \
++			../esp-hal-3rdparty-spinlock.patch; \
++	fi
+ 
+ # Silent preprocessor warnings
+ 
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_adc.c b/arch/xtensa/src/esp32s3/esp32s3_adc.c
+index ce87f13ff40..a019fde93b2 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_adc.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_adc.c
+@@ -32,7 +32,7 @@
+ 
+ #include <nuttx/mutex.h>
+ 
+-#include "esp32s3_gpio.h"
++#include "esp32s3_rtc_gpio.h"
+ #include "esp32s3_dma.h"
+ #include "esp32s3_irq.h"
+ #include "esp32s3_adc.h"
+@@ -417,21 +417,23 @@ static inline void adc_samplecfg(int channel)
+ {
+   uint32_t regval;
+ 
+-  /* set (Frequency division) (inversion adc) */
++  /* Set frequency division and disable ADC1 data inversion. */
+ 
+   regval = getreg32(SENS_SAR_READER1_CTRL_REG);
+-  regval &= ~(SENS_SAR1_CLK_DIV_M);
++  regval &= ~(SENS_SAR1_CLK_DIV_M | SENS_SAR1_DATA_INV_M);
+   regval |= (1 << SENS_SAR1_CLK_DIV_S);
+   putreg32(regval, SENS_SAR_READER1_CTRL_REG);
+ 
+-  /* Enable ADC1, its sampling attenuation */
++  /* Set ADC1 sampling attenuation. */
+ 
+   regval = getreg32(SENS_SAR_ATTEN1_REG);
+-  regval &= ~(ADC_ATTEN_DEF << (channel * 2));
+-  regval |= ADC_ATTEN_DEF << (channel * 2);
++  regval &= ~(0x3 << (channel * 2));
++  regval |= (ADC_ATTEN_DEF & 0x3) << (channel * 2);
+   putreg32(regval, SENS_SAR_ATTEN1_REG);
+ 
+-  /* Enable ADC1, its sampling channel and attenuation */
++  /* Select the RTC controller and configure its sampling channel. */
++
++  resetbits(SENS_SAR1_DIG_FORCE_M, SENS_SAR_MEAS1_MUX_REG);
+ 
+   regval  = getreg32(SENS_SAR_MEAS1_CTRL2_REG);
+   regval &= ~(SENS_SAR1_EN_PAD_M | SENS_SAR1_EN_PAD_FORCE_M |
+@@ -460,8 +462,14 @@ static uint16_t adc_read(void)
+   uint16_t adc;
+   uint32_t regval;
+ 
+-  /* Trigger ADC1 sampling */
++  /* Wait until ADC1 is idle, then trigger a conversion with a rising edge. */
+ 
++  while (getreg32(SENS_SAR_SLAVE_ADDR1_REG) &
++         SENS_SARADC_MEAS_STATUS_M)
++    {
++    }
++
++  resetbits(SENS_MEAS1_START_SAR, SENS_SAR_MEAS1_CTRL2_REG);
+   setbits(SENS_MEAS1_START_SAR, SENS_SAR_MEAS1_CTRL2_REG);
+ 
+   /* Wait until ADC1 sampling is done */
+@@ -713,11 +721,17 @@ static int adc_setup(struct adc_dev_s *dev)
+ 
+   adc_enable_clk();
+ 
+-  /* Disable GPIO input and output */
++  /* Route the pad to the RTC/analog function and disable digital I/O. */
+ 
+   ainfo("pin: %" PRIu8 "\n", priv->pin);
+ 
+-  esp32s3_configgpio(priv->pin, INPUT | FUNCTION_1);
++  ret = esp32s3_configrtcio(priv->pin, RTC_FUNCTION_RTCIO);
++  if (ret < 0)
++    {
++      adc_disable_clk();
++      aerr("Failed to configure RTC GPIO ret=%d\n", ret);
++      return ret;
++    }
+ 
+   /* Start calibration only once  */
+ 
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_cam.c b/arch/xtensa/src/esp32s3/esp32s3_cam.c
+index 8c4e9feac63..20e24f5c01b 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_cam.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_cam.c
+@@ -206,8 +206,13 @@ static void esp32s3_cam_setup_dma(struct esp32s3_cam_s *priv)
+ static void frame_complete_worker(void *arg)
+ {
+   struct esp32s3_cam_s *priv = (struct esp32s3_cam_s *)arg;
++  imgdata_capture_t callback;
++  void *callback_arg;
++  int ret;
+ 
+-  if (priv->cb == NULL || priv->fb == NULL)
++  callback = priv->cb;
++  callback_arg = priv->cb_arg;
++  if (callback == NULL || priv->fb == NULL)
+     {
+       return;
+     }
+@@ -220,7 +225,24 @@ static void frame_complete_worker(void *arg)
+       memcpy(priv->v4l2_buf, priv->fb, priv->fb_size);
+     }
+ 
+-  priv->cb(0, priv->fb_size, &priv->frame_ts, priv->cb_arg);
++  callback(0, priv->fb_size, &priv->frame_ts, callback_arg);
++
++  /* The VSYNC ISR stops CAM and GDMA at every frame boundary.  The capture
++   * upper-half selects the next destination buffer from inside the callback,
++   * but it only calls IMGDATA_SET_BUF; it expects the imgdata lower-half to
++   * keep streaming.  Rearm the internal DMA buffer after that buffer switch.
++   * If the callback stopped the stream it clears cb, so do not restart.
++   */
++
++  if (priv->cb != NULL && !priv->capturing)
++    {
++      ret = esp32s3_cam_start_capture(&priv->data, 0, NULL, NULL,
++                                      priv->cb, priv->cb_arg);
++      if (ret < 0)
++        {
++          snerr("ERROR: Failed to rearm CAM capture: %d\n", ret);
++        }
++    }
+ }
+ 
+ /****************************************************************************
+@@ -358,7 +380,12 @@ static void esp32s3_cam_gpio_config(void)
+ 
+   esp32s3_configgpio(CONFIG_ESP32S3_CAM_VSYNC_PIN, INPUT);
+   esp32s3_gpio_matrix_in(CONFIG_ESP32S3_CAM_VSYNC_PIN,
+-                         CAM_V_SYNC_IDX, true);
++                         CAM_V_SYNC_IDX,
++#ifdef CONFIG_ESP32S3_CAM_VSYNC_INVERT
++                         true);
++#else
++                         false);
++#endif
+ 
+   /* HREF (H_ENABLE) input */
+ 
+@@ -759,11 +786,17 @@ static int esp32s3_cam_start_capture(struct imgdata_s *data,
+ 
+   priv->capturing = true;
+ 
++  /* Keep the VSYNC polarity stable while capture is active.  Dynamically
++   * toggling the GPIO matrix input here can synthesize a false frame edge.
++   */
++
+   esp32s3_gpio_matrix_in(CONFIG_ESP32S3_CAM_VSYNC_PIN,
+-                         CAM_V_SYNC_IDX, false);
+-  up_udelay(10);
+-  esp32s3_gpio_matrix_in(CONFIG_ESP32S3_CAM_VSYNC_PIN,
+-                         CAM_V_SYNC_IDX, true);
++                         CAM_V_SYNC_IDX,
++#ifdef CONFIG_ESP32S3_CAM_VSYNC_INVERT
++                         true);
++#else
++                         false);
++#endif
+ 
+   return OK;
+ }
+@@ -777,6 +810,11 @@ static int esp32s3_cam_stop_capture(struct imgdata_s *data)
+   struct esp32s3_cam_s *priv = (struct esp32s3_cam_s *)data;
+   uint32_t regval;
+ 
++  /* Block a pending frame worker from rearming CAM/GDMA. */
++
++  priv->cb = NULL;
++  priv->cb_arg = NULL;
++
+   regval = getreg32(LCD_CAM_CAM_CTRL1_REG);
+   regval &= ~LCD_CAM_CAM_START_M;
+   putreg32(regval, LCD_CAM_CAM_CTRL1_REG);
+@@ -785,13 +823,34 @@ static int esp32s3_cam_stop_capture(struct imgdata_s *data)
+   regval |= LCD_CAM_CAM_UPDATE_REG_M;
+   putreg32(regval, LCD_CAM_CAM_CTRL_REG);
+ 
++  SET_GDMA_CH_BITS(DMA_IN_LINK_CH0_REG,
++                   priv->dma_channel,
++                   DMA_INLINK_STOP_CH0_M);
+   priv->capturing = false;
+ 
+   work_cancel_sync(LPWORK, &priv->frame_work);
+ 
++  /* The worker might already have passed its rearm check when cb was
++   * cleared.  It is quiescent now, so clear its callback and stop the
++   * hardware once more before returning STREAMOFF to the caller.
++   */
++
+   priv->cb = NULL;
+   priv->cb_arg = NULL;
+ 
++  regval = getreg32(LCD_CAM_CAM_CTRL1_REG);
++  regval &= ~LCD_CAM_CAM_START_M;
++  putreg32(regval, LCD_CAM_CAM_CTRL1_REG);
++
++  regval = getreg32(LCD_CAM_CAM_CTRL_REG);
++  regval |= LCD_CAM_CAM_UPDATE_REG_M;
++  putreg32(regval, LCD_CAM_CAM_CTRL_REG);
++
++  SET_GDMA_CH_BITS(DMA_IN_LINK_CH0_REG,
++                   priv->dma_channel,
++                   DMA_INLINK_STOP_CH0_M);
++  priv->capturing = false;
++
+   return OK;
+ }
+ 
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_lowputc.c b/arch/xtensa/src/esp32s3/esp32s3_lowputc.c
+index b8c7e264c20..0c090d43bb0 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_lowputc.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_lowputc.c
+@@ -52,6 +52,10 @@
+ 
+ #include "esp32s3_lowputc.h"
+ 
++#ifdef CONFIG_ESP32S3_USBSERIAL
++#  include "esp32s3_usbserial.h"
++#endif
++
+ /****************************************************************************
+  * Pre-processor Definitions
+  ****************************************************************************/
+@@ -988,6 +992,8 @@ void xtensa_lowputc(char ch)
+   /* Then send the character */
+ 
+   esp32s3_lowputc_send_byte(priv, ch);
++#elif defined(CONFIG_ESP32S3_USBSERIAL)
++  esp32s3_usbserial_write(ch);
+ #endif /* CONSOLE_UART */
+ }
+ 
+@@ -1003,6 +1009,15 @@ void esp32s3_lowsetup(void)
+ {
+ #ifndef CONFIG_SUPPRESS_UART_CONFIG
+ 
++#ifdef CONFIG_ESP32S3_USBSERIAL
++  /* esp_perip_clk_init() disables and resets SYSTEM_USB_CLK_EN.  Restore
++   * the USB Serial/JTAG peripheral before early console output or opening
++   * /dev/console.
++   */
++
++  periph_module_enable(PERIPH_USB_MODULE);
++#endif
++
+ #ifdef CONFIG_ESP32S3_UART0
+   esp32s3_lowputc_enable_sysclk(&g_uart0_config);
+   esp32s3_lowputc_config_pins(&g_uart0_config);
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_sdmmc.c b/arch/xtensa/src/esp32s3/esp32s3_sdmmc.c
+index d76eba5818c..e579b08f527 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_sdmmc.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_sdmmc.c
+@@ -40,9 +40,6 @@
+ #include <nuttx/semaphore.h>
+ #include <nuttx/spinlock.h>
+ #include <nuttx/mmcsd.h>
+-#if defined(CONFIG_ESP32S3_SDMMC_DMA) && defined(CONFIG_ESP32S3_SPIRAM)
+-#include <nuttx/kmalloc.h>
+-#endif
+ 
+ #include "xtensa.h"
+ #include "esp32s3_gpio.h"
+@@ -104,9 +101,14 @@
+ #define ESP32S3_TXFIFO_SIZE       (ESP32S3_TXFIFO_DEPTH | ESP32S3_TXFIFO_WIDTH)
+ #define ESP32S3_RXFIFO_SIZE       (ESP32S3_RXFIFO_DEPTH | ESP32S3_RXFIFO_WIDTH)
+ 
+-/* Number of DMA Descriptors */
++/* Number of DMA Descriptors.
++ *
++ * ESP32S3_MULTIBLOCK_LIMIT also bounds the static bounce buffer below, so it
++ * must stay in sync with CONFIG_MMCSD_MULTIBLOCK_LIMIT (the mmcsd layer
++ * splits larger transfers into chunks of at most this many blocks).
++ */
+ 
+-#define ESP32S3_MULTIBLOCK_LIMIT  128
++#define ESP32S3_MULTIBLOCK_LIMIT  16
+ #define NUM_DMA_DESCRIPTORS       (1 + (ESP32S3_MULTIBLOCK_LIMIT * 512 / MCI_DMADES1_MAXTR))
+ 
+ #if (CONFIG_MMCSD_MULTIBLOCK_LIMIT == 0 || \
+@@ -114,6 +116,26 @@
+ #error "CONFIG_MMCSD_MULTIBLOCK_LIMIT is too big"
+ #endif
+ 
++#if defined(CONFIG_ESP32S3_SDMMC_DMA) && defined(CONFIG_ESP32S3_SPIRAM)
++/* Bounce buffer for client buffers the SDMMC internal DMA cannot reach.
++ *
++ * The controller's DMA only addresses the internal SRAM window, so a
++ * transfer whose client buffer lives in PSRAM must be routed through a
++ * buffer that is guaranteed to be internal.  .bss always links to internal
++ * SRAM on this SoC, while kmm_memalign() may fall back to PSRAM once
++ * internal DRAM is exhausted.  The internal window is uncached, so no cache
++ * maintenance is needed around the DMA (esp32s3_cam.c needs cache ops only
++ * because GDMA, unlike this controller, can reach cached PSRAM).
++ *
++ * The descriptor buffer pointers must be word aligned, and .bss placement
++ * alone gives no alignment guarantee (the linker may place this at any byte
++ * boundary), so force one explicitly.
++ */
++
++static uint8_t g_bounce_buf[ESP32S3_MULTIBLOCK_LIMIT * 512]
++  __attribute__((aligned(32)));
++#endif
++
+ /* Data transfer interrupt mask bits */
+ 
+ #define SDCARD_RECV_MASK        (SDMMC_INT_DTO  | SDMMC_INT_DCRC | SDMMC_INT_DRTO | \
+@@ -234,6 +256,8 @@ struct esp32s3_dev_s
+   worker_t           callback;        /* Registered callback function */
+   void              *cbarg;           /* Registered callback argument */
+   struct work_s      cbwork;          /* Callback work queue structure */
++  struct work_s      cdwork;          /* Card-detect debounce work */
++  volatile bool      cdwork_pending;  /* Debounce work is queued */
+ 
+   /* Interrupt mode data transfer support */
+ 
+@@ -244,8 +268,8 @@ struct esp32s3_dev_s
+   uint32_t           dmamask;         /* Interrupt enables for DMA transfer */
+   volatile struct sdmmc_dma_s dma_desc[NUM_DMA_DESCRIPTORS];
+ #ifdef CONFIG_ESP32S3_SPIRAM
+-  uint8_t           *dma_buf;
+-  size_t            dma_buf_size;
++  size_t            bounce_len;      /* Non-zero while a static-bounce
++                                      * transfer is in flight */
+ #endif
+ #endif
+   bool               wrdir;           /* True: Writing False: Reading */
+@@ -843,6 +867,71 @@ static void esp32s3_endtransfer(struct esp32s3_dev_s *priv,
+     }
+ }
+ 
++/****************************************************************************
++ * Name: esp32s3_update_cdstatus
++ *
++ * Description:
++ *   Sample the live card-detect (and write-protect) levels into cdstatus.
++ *   Only this function and the debounced card-detect worker change the
++ *   PRESENT bit, so a momentary glitch on the line cannot make the driver
++ *   unregister a working card through a racing status() call.
++ *
++ ****************************************************************************/
++
++static void esp32s3_update_cdstatus(struct esp32s3_dev_s *priv)
++{
++  if ((esp32s3_getreg(ESP32S3_SDMMC_CDETECT) &
++       SDMMC_CDETECT_NOTPRESENT(priv->slot)) == 0)
++    {
++      priv->cdstatus |= SDIO_STATUS_PRESENT;
++
++#ifdef CONFIG_MMCSD_HAVE_WRITEPROTECT
++      if ((esp32s3_getreg(ESP32S3_SDMMC_WRTPRT) &
++           SDMMC_WRTPRT_PROTECTED(priv->slot)) != 0)
++        {
++          priv->cdstatus |= SDIO_STATUS_WRPROTECTED;
++        }
++      else
++#endif
++        {
++          priv->cdstatus &= ~SDIO_STATUS_WRPROTECTED;
++        }
++    }
++  else
++    {
++      priv->cdstatus &= ~(SDIO_STATUS_PRESENT | SDIO_STATUS_WRPROTECTED);
++    }
++}
++
++/****************************************************************************
++ * Name: esp32s3_cd_debounce
++ *
++ * Description:
++ *   Deferred card-detect re-check.  The card-detect input can glitch
++ *   briefly while other peripherals power up; acting on the instantaneous
++ *   edge would unregister a perfectly good card.  Re-read the level after
++ *   the debounce delay and only propagate a real, stable change.
++ *
++ ****************************************************************************/
++
++static void esp32s3_cd_debounce(void *arg)
++{
++  struct esp32s3_dev_s *priv = arg;
++  sdio_statset_t cdstatus = priv->cdstatus;
++
++  priv->cdwork_pending = false;
++  esp32s3_update_cdstatus(priv);
++
++  mcinfo("cdstatus OLD: %02x NEW: %02x\n", cdstatus, priv->cdstatus);
++
++  /* Perform any requested callback if the status has changed */
++
++  if (cdstatus != priv->cdstatus)
++    {
++      esp32s3_callback(priv);
++    }
++}
++
+ /****************************************************************************
+  * Name: esp32s3_interrupt
+  *
+@@ -881,41 +970,17 @@ static int esp32s3_interrupt(int irq, void *context, void *arg)
+ 
+       if ((enabled & SDMMC_INT_CDET) != 0)
+         {
+-          sdio_statset_t cdstatus;
+-
+-          /* Update card status */
+-
+-          cdstatus = priv->cdstatus;
+-          if ((esp32s3_getreg(ESP32S3_SDMMC_CDETECT) &
+-              SDMMC_CDETECT_NOTPRESENT(priv->slot)) == 0)
+-            {
+-              priv->cdstatus |= SDIO_STATUS_PRESENT;
+-
+-#ifdef CONFIG_MMCSD_HAVE_WRITEPROTECT
+-              if ((esp32s3_getreg(ESP32S3_SDMMC_WRTPRT) &
+-                  SDMMC_WRTPRT_PROTECTED(priv->slot)) != 0)
+-                {
+-                  priv->cdstatus |= SDIO_STATUS_WRPROTECTED;
+-                }
+-              else
+-#endif
+-                {
+-                  priv->cdstatus &= ~SDIO_STATUS_WRPROTECTED;
+-                }
+-            }
+-          else
+-            {
+-              priv->cdstatus &=
+-                ~(SDIO_STATUS_PRESENT | SDIO_STATUS_WRPROTECTED);
+-            }
+-
+-          mcinfo("cdstatus OLD: %02x NEW: %02x\n", cdstatus, priv->cdstatus);
+-
+-          /* Perform any requested callback if the status has changed */
++          /* Do not trust the instantaneous level here: the card-detect
++           * line can glitch briefly during peripheral power-up, which
++           * would unregister a working card.  Sample the level from a
++           * deferred, debounced worker instead.
++           */
+ 
+-          if (cdstatus != priv->cdstatus)
++          if (!priv->cdwork_pending)
+             {
+-              esp32s3_callback(priv);
++              priv->cdwork_pending = true;
++              work_queue(HPWORK, &priv->cdwork, esp32s3_cd_debounce, priv,
++                         MSEC2TICK(50));
+             }
+         }
+ #endif
+@@ -1273,17 +1338,11 @@ static sdio_statset_t esp32s3_status(struct sdio_dev_s *dev)
+ {
+   struct esp32s3_dev_s *priv = (struct esp32s3_dev_s *)dev;
+ 
+-#ifdef CONFIG_MMCSD_HAVE_CARDDETECT
+-  if ((esp32s3_getreg(ESP32S3_SDMMC_CDETECT) &
+-       SDMMC_CDETECT_NOTPRESENT(priv->slot)) == 0)
+-    {
+-      priv->cdstatus |= SDIO_STATUS_PRESENT;
+-    }
+-  else
+-    {
+-      priv->cdstatus &= ~SDIO_STATUS_PRESENT;
+-    }
+-#endif
++  /* Return the debounced card status.  The live CDETECT/WRTPRT levels are
++   * sampled only by esp32s3_update_cdstatus() (at attach time and from the
++   * debounced card-detect worker), so callers of SDIO_PRESENT cannot race
++   * with a momentary card-detect glitch and drop a working card.
++   */
+ 
+   mcinfo("cdstatus=%02x\n", priv->cdstatus);
+ 
+@@ -1653,6 +1712,12 @@ static int esp32s3_attach(struct sdio_dev_s *dev)
+ 
+       esp32s3_putreg(SDCARD_INT_CDET, ESP32S3_SDMMC_INTMASK);
+ 
++      /* Seed the debounced card status from the live level so the first
++       * probe sees the card without waiting for a card-detect edge.
++       */
++
++      esp32s3_update_cdstatus(priv);
++
+       /* Enable SD card interrupts at the NVIC.  They can now be enabled at
+        * the SD card controller as needed.
+        */
+@@ -1957,11 +2022,7 @@ static int esp32s3_cancel(struct sdio_dev_s *dev)
+   wd_cancel(&priv->waitwdog);
+ 
+ #if defined(CONFIG_ESP32S3_SDMMC_DMA) && defined(CONFIG_ESP32S3_SPIRAM)
+-  if (!esp32s3_ptr_dma_capable(priv->buffer) && priv->dma_buf)
+-    {
+-      kmm_free(priv->dma_buf);
+-      priv->dma_buf = NULL;
+-    }
++  priv->bounce_len = 0;
+ #endif
+ 
+   /* Mark no transfer in progress */
+@@ -2469,15 +2530,18 @@ out:
+   leave_critical_section(flags);
+ 
+ #if defined(CONFIG_ESP32S3_SDMMC_DMA) && defined(CONFIG_ESP32S3_SPIRAM)
+-  if (!esp32s3_ptr_dma_capable(priv->buffer) && priv->dma_buf)
++  if (priv->bounce_len != 0)
+     {
+       if (!priv->wrdir && wkupevent == SDIOWAIT_TRANSFERDONE)
+         {
+-          memcpy(priv->buffer, priv->dma_buf, priv->dma_buf_size);
++          /* Copy what the DMA engine wrote into the internal bounce buffer
++           * back to the client buffer, which may live in PSRAM.
++           */
++
++          memcpy(priv->buffer, g_bounce_buf, priv->bounce_len);
+         }
+ 
+-      kmm_free(priv->dma_buf);
+-      priv->dma_buf = NULL;
++      priv->bounce_len = 0;
+     }
+ #endif
+ 
+@@ -2569,19 +2633,25 @@ static int esp32s3_fill_dma_desc(struct esp32s3_dev_s *priv)
+ #ifdef CONFIG_ESP32S3_SPIRAM
+   if (!esp32s3_ptr_dma_capable(priv->buffer))
+     {
+-      priv->dma_buf = kmm_memalign(16, buflen);
+-      if (!priv->dma_buf)
++      /* The client buffer (typically a task stack or heap allocation in
++       * PSRAM) is outside the SDMMC DMA address range.  Route the transfer
++       * through the static internal bounce buffer instead.  The mmcsd layer
++       * bounds every request to ESP32S3_MULTIBLOCK_LIMIT blocks; refuse
++       * anything larger rather than silently corrupt it.
++       */
++
++      if (buflen > sizeof(g_bounce_buf))
+         {
+           return -ENOMEM;
+         }
+ 
+-      priv->dma_buf_size = buflen;
+-      buffer = (uint32_t)priv->dma_buf;
+-
+       if (priv->wrdir)
+         {
+-          memcpy(priv->dma_buf, priv->buffer, buflen);
++          memcpy(g_bounce_buf, priv->buffer, buflen);
+         }
++
++      priv->bounce_len = buflen;
++      buffer = (uint32_t)g_bounce_buf;
+     }
+ #endif
+ 
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_start.c b/arch/xtensa/src/esp32s3/esp32s3_start.c
+index 3eb153b4cf4..4d7ba2bd6eb 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_start.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_start.c
+@@ -78,6 +78,13 @@
+ #  define showprogress(c)
+ #endif
+ 
++#if defined(CONFIG_ESP32S3_APP_FORMAT_MCUBOOT) || \
++    defined(CONFIG_ESPRESSIF_SIMPLE_BOOT)
++#  define bootdiag(s)         ets_printf("[bootdiag] %s\n", s)
++#else
++#  define bootdiag(s)
++#endif
++
+ #if defined(CONFIG_ESP32S3_APP_FORMAT_MCUBOOT) || \
+     defined (CONFIG_ESPRESSIF_SIMPLE_BOOT)
+ #  ifdef CONFIG_ESP32S3_APP_FORMAT_MCUBOOT
+@@ -316,6 +323,8 @@ noinstrument_function void noreturn_function IRAM_ATTR __esp32s3_start(void)
+   sp = (uint32_t)g_idlestack + IDLETHREAD_STACKSIZE;
+   __asm__ __volatile__("mov sp, %0\n" : : "r"(sp));
+ 
++  bootdiag("S0 start entered");
++
+   /* Raise an exception in case page 0 is accessed */
+ 
+   esp32s3_region_protection();
+@@ -358,6 +367,7 @@ noinstrument_function void noreturn_function IRAM_ATTR __esp32s3_start(void)
+   /* Set CPU frequency configured in board.h */
+ 
+   esp32s3_clockconfig();
++  bootdiag("S1 clocks configured");
+ 
+   /* Initialize peripherals parameters */
+ 
+@@ -367,6 +377,7 @@ noinstrument_function void noreturn_function IRAM_ATTR __esp32s3_start(void)
+   /* Configure the UART so we can get debug output */
+ 
+   esp32s3_lowsetup();
++  bootdiag("S2 console setup");
+ #endif
+ 
+ #ifdef USE_EARLYSERIALINIT
+@@ -408,6 +419,8 @@ noinstrument_function void noreturn_function IRAM_ATTR __esp32s3_start(void)
+     }
+ #endif
+ 
++  bootdiag("S3 PSRAM initialized");
++
+   /* Setup the syscall table needed by the ROM code */
+ 
+   esp_setup_syscall_table();
+@@ -437,6 +450,7 @@ noinstrument_function void noreturn_function IRAM_ATTR __esp32s3_start(void)
+ 
+   /* Bring up NuttX */
+ 
++  bootdiag("S4 entering nx_start");
+   nx_start();
+   for (; ; ); /* Should not return */
+ }
+@@ -488,7 +502,9 @@ noinstrument_function void IRAM_ATTR __start(void)
+     }
+ #endif
+ 
++  bootdiag("M0 segments mapped");
+   configure_cpu_caches();
++  bootdiag("M1 CPU caches configured");
+ 
+   __esp32s3_start();
+ 
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_usbserial.c b/arch/xtensa/src/esp32s3/esp32s3_usbserial.c
+index 647e6a3e1b4..a7a87c315ff 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_usbserial.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_usbserial.c
+@@ -35,6 +35,7 @@
+ #endif
+ 
+ #include <nuttx/arch.h>
++#include <nuttx/clock.h>
+ #include <nuttx/irq.h>
+ #include <nuttx/kmalloc.h>
+ #include <nuttx/serial/serial.h>
+@@ -53,20 +54,39 @@
+  * Pre-processor Macros
+  ****************************************************************************/
+ 
+-/* The hardware buffer has a fixed size of 64 bytes */
++/* The hardware endpoint buffer has a fixed size of 64 bytes.  Keep a
++ * larger software TX ring so console output cannot stall boot merely
++ * because no host has opened the USB serial port yet.
++ */
+ 
+ #define ESP32S3_USBCDC_BUFFERSIZE 64
+ 
++#ifndef CONFIG_ESP32S3_USBSERIAL_TXBUFSIZE
++#  define CONFIG_ESP32S3_USBSERIAL_TXBUFSIZE 16384
++#endif
++
++#ifndef CONFIG_ESP32S3_USBSERIAL_TXSTALL_TIMEOUT
++#  define CONFIG_ESP32S3_USBSERIAL_TXSTALL_TIMEOUT 1000
++#endif
++
++/* uart_irqwrite() has no timeout and polls txready() with interrupts locked.
++ * Bound that polling path so interrupt/idle logging cannot hang the CPU.
++ */
++
++#define ESP32S3_USBCDC_TXPOLL_LIMIT 1000
++
+ /****************************************************************************
+  * Private Types
+  ****************************************************************************/
+ 
+ struct esp32s3_priv_s
+ {
+-  const uint8_t  periph;        /* peripheral ID */
+-  const uint8_t  irq;           /* IRQ number assigned to the peripheral */
+-  int            cpu;           /* CPU id */
+-  int            cpuint;        /* CPU interrupt assigned */
++  const uint8_t  periph;      /* peripheral ID */
++  const uint8_t  irq;         /* IRQ number assigned to the peripheral */
++  int            cpu;         /* CPU id */
++  int            cpuint;      /* CPU interrupt assigned */
++  volatile bool  drop_output; /* Drop direct writes until host recovers */
++  volatile uint32_t txpolls;  /* Consecutive direct TX-ready polls */
+ };
+ 
+ /****************************************************************************
+@@ -95,7 +115,7 @@ static int  esp32s3_ioctl(struct file *filep, int cmd, unsigned long arg);
+  ****************************************************************************/
+ 
+ static char g_rxbuffer[ESP32S3_USBCDC_BUFFERSIZE];
+-static char g_txbuffer[ESP32S3_USBCDC_BUFFERSIZE];
++static char g_txbuffer[CONFIG_ESP32S3_USBSERIAL_TXBUFSIZE];
+ 
+ static struct esp32s3_priv_s g_usbserial_priv =
+ {
+@@ -127,7 +147,8 @@ static struct uart_ops_s g_uart_ops =
+ 
+ uart_dev_t g_uart_usbserial =
+ {
+-  .isconsole = true,
++  .isconsole    = true,
++  .xmit_timeout = MSEC2TICK(CONFIG_ESP32S3_USBSERIAL_TXSTALL_TIMEOUT),
+   .recv      =
+     {
+       .size    = ESP32S3_USBCDC_BUFFERSIZE,
+@@ -135,7 +156,7 @@ uart_dev_t g_uart_usbserial =
+     },
+   .xmit      =
+     {
+-      .size    = ESP32S3_USBCDC_BUFFERSIZE,
++      .size    = CONFIG_ESP32S3_USBSERIAL_TXBUFSIZE,
+       .buffer  = g_txbuffer,
+     },
+   .ops       = &g_uart_ops,
+@@ -171,6 +192,7 @@ static int esp32s3_interrupt(int irq, void *context, void *arg)
+     {
+       putreg32(USB_SERIAL_JTAG_SERIAL_IN_EMPTY_INT_CLR,
+                USB_SERIAL_JTAG_INT_CLR_REG);
++
+       uart_xmitchars(dev);
+     }
+ 
+@@ -367,11 +389,38 @@ static bool esp32s3_txempty(struct uart_dev_s *dev)
+ 
+ static bool esp32s3_txready(struct uart_dev_s *dev)
+ {
++  struct esp32s3_priv_s *priv = dev->priv;
+   uint32_t regval;
+ 
+   regval = getreg32(USB_SERIAL_JTAG_EP1_CONF_REG);
+ 
+-  return regval & USB_SERIAL_JTAG_SERIAL_IN_EP_DATA_FREE;
++  if ((regval & USB_SERIAL_JTAG_SERIAL_IN_EP_DATA_FREE) != 0)
++    {
++      /* Hardware readiness proves that a host is consuming again. */
++
++      priv->txpolls = 0;
++      priv->drop_output = false;
++      return true;
++    }
++
++  if (priv->drop_output)
++    {
++      return true;
++    }
++
++  /* The serial upper half directly polls this method from interrupt and
++   * idle contexts.  Report synthetic readiness after a bounded wait; send()
++   * will then discard output rather than write to the busy endpoint.
++   */
++
++  if (++priv->txpolls >= ESP32S3_USBCDC_TXPOLL_LIMIT)
++    {
++      priv->txpolls = 0;
++      priv->drop_output = true;
++      return true;
++    }
++
++  return false;
+ }
+ 
+ /****************************************************************************
+@@ -384,6 +433,18 @@ static bool esp32s3_txready(struct uart_dev_s *dev)
+ 
+ static void esp32s3_send(struct uart_dev_s *dev, int ch)
+ {
++  struct esp32s3_priv_s *priv = dev->priv;
++
++  /* txready() uses synthetic readiness to bound direct writes when no host
++   * consumes the endpoint.  Never touch the full hardware FIFO in that
++   * state; real DATA_FREE automatically clears drop_output.
++   */
++
++  if (priv->drop_output)
++    {
++      return;
++    }
++
+   /* Write the character to the buffer. */
+ 
+   putreg32(ch, USB_SERIAL_JTAG_EP1_REG);
+@@ -474,8 +535,30 @@ static int esp32s3_ioctl(struct file *filep, int cmd, unsigned long arg)
+ 
+ void esp32s3_usbserial_write(char ch)
+ {
+-  while (!esp32s3_txready(&g_uart_usbserial));
++  irqstate_t flags;
++  unsigned int retries = 1000;
++
++  /* Serialize the complete readiness-to-commit transaction with the UART
++   * upper half and TX ISR.  The recursive lock is statically zero-initialized
++   * and is therefore also usable before uart_register() during early boot.
++   */
++
++  flags = uart_spinlock(&g_uart_usbserial, false);
++
++  /* USB Serial/JTAG stops reporting TX space when no host consumes the
++   * endpoint.  Never let diagnostic output block the entire boot path.
++   */
++
++  while (!esp32s3_txready(&g_uart_usbserial))
++    {
++      if (retries-- == 0)
++        {
++          uart_spinunlock(&g_uart_usbserial, false, flags);
++          return;
++        }
++    }
+ 
+   esp32s3_send(&g_uart_usbserial, ch);
++  uart_spinunlock(&g_uart_usbserial, false, flags);
+ }
+ 
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c b/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
+index ce697ab4df5..509997a0be0 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_wifi_adapter.c
+@@ -2169,7 +2169,20 @@ static void esp_evt_work_cb(void *arg)
+             break;
+ 
+           case WIFI_ADPT_EVT_STA_CONNECT:
+-            wlinfo("Wi-Fi sta connect\n");
++            {
++              FAR wifi_event_sta_connected_t *connected =
++                (FAR wifi_event_sta_connected_t *)evt_adpt->buf;
++
++              printf("[esp-wifi] station connected bssid="
++                     "%02x:%02x:%02x:%02x:%02x:%02x channel=%u "
++                     "authmode=%u\n",
++                     connected->bssid[0], connected->bssid[1],
++                     connected->bssid[2], connected->bssid[3],
++                     connected->bssid[4], connected->bssid[5],
++                     (unsigned)connected->channel,
++                     (unsigned)connected->authmode);
++            }
++
+             g_sta_connected = true;
+             ret = esp32s3_wlan_sta_set_linkstatus(true);
+             if (ret < 0)
+@@ -2180,6 +2193,15 @@ static void esp_evt_work_cb(void *arg)
+             break;
+ 
+           case WIFI_ADPT_EVT_STA_DISCONNECT:
++            {
++              FAR wifi_event_sta_disconnected_t *disconnected =
++                (FAR wifi_event_sta_disconnected_t *)evt_adpt->buf;
++
++              printf("[esp-wifi] station disconnected reason=%u rssi=%d\n",
++                     (unsigned)disconnected->reason,
++                     (int)disconnected->rssi);
++            }
++
+             wlinfo("Wi-Fi sta disconnect\n");
+             g_sta_connected = false;
+             ret = esp32s3_wlan_sta_set_linkstatus(false);
+@@ -4662,7 +4684,16 @@ int esp_wifi_adapter_init(void)
+   wifi_cfg.rx_ba_win          = CONFIG_ESP32S3_WIFI_RXBA_AMPDU_WZ;
+   wifi_cfg.static_rx_buf_num  = CONFIG_ESP32S3_WIFI_STATIC_RXBUF_NUM;
+   wifi_cfg.dynamic_rx_buf_num = CONFIG_ESP32S3_WIFI_DYNAMIC_RXBUF_NUM;
++
++#ifdef CONFIG_ESP32S3_WIFI_STATIC_TXBUF
++  wifi_cfg.tx_buf_type        = 0;
++  wifi_cfg.static_tx_buf_num  = CONFIG_ESP32S3_WIFI_STATIC_TXBUF_NUM;
++  wifi_cfg.dynamic_tx_buf_num = 0;
++#else
++  wifi_cfg.tx_buf_type        = 1;
++  wifi_cfg.static_tx_buf_num  = 0;
+   wifi_cfg.dynamic_tx_buf_num = CONFIG_ESP32S3_WIFI_DYNAMIC_TXBUF_NUM;
++#endif
+ 
+   ret = esp_wifi_init(&wifi_cfg);
+   if (ret)
+@@ -5103,6 +5134,9 @@ int esp_wifi_sta_essid(struct iwreq *iwr, bool set)
+     {
+       memset(wifi_cfg.sta.ssid, 0x0, SSID_MAX_LEN);
+       memcpy(wifi_cfg.sta.ssid, pdata, len);
++      wifi_cfg.sta.channel = 0; /* Scan all channels; phone hotspots may move. */
++      wifi_cfg.sta.bssid_set = false;
++      memset(wifi_cfg.sta.bssid, 0, sizeof(wifi_cfg.sta.bssid));
+       memset(wifi_cfg.sta.sae_h2e_identifier, 0x0, SAE_H2E_IDENTIFIER_LEN);
+       wifi_cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+ 
+@@ -5114,23 +5148,28 @@ int esp_wifi_sta_essid(struct iwreq *iwr, bool set)
+               wlerr("Failed to disconnect from Wi-Fi AP ret=%d\n", ret);
+               return ret;
+             }
++        }
+ 
+-          ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+-          if (ret)
+-            {
+-              wlerr("Failed to set Wi-Fi config data ret=%d\n", ret);
+-              return wifi_errno_trans(ret);
+-            }
++      /* Publish the staged SSID before esp_wifi_sta_connect(); that helper
++       * reapplies g_sta_wifi_cfg and would otherwise overwrite this local
++       * configuration with the previous (often empty) SSID. */
+ 
+-          ret = esp_wifi_sta_connect();
+-          if (ret)
+-            {
+-              wlerr("Failed to connect to Wi-Fi AP ret=%d\n", ret);
+-              return ret;
+-            }
++      g_sta_wifi_cfg = wifi_cfg;
++      ret = esp_wifi_set_config(WIFI_IF_STA, &g_sta_wifi_cfg);
++      if (ret)
++        {
++          wlerr("Failed to set Wi-Fi config data ret=%d\n", ret);
++          return wifi_errno_trans(ret);
+         }
+ 
+-      g_sta_wifi_cfg = wifi_cfg;
++      ret = esp_wifi_sta_connect();
++      if (ret)
++        {
++          printf("[esp-wifi] station connect start failed ret=0x%x\n",
++                 (unsigned)ret);
++          wlerr("Failed to connect to Wi-Fi AP ret=%d\n", ret);
++          return ret;
++        }
+     }
+   else
+     {
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_wlan.c b/arch/xtensa/src/esp32s3/esp32s3_wlan.c
+index d7c0578d0b8..85370663f68 100644
+--- a/arch/xtensa/src/esp32s3/esp32s3_wlan.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_wlan.c
+@@ -57,9 +57,11 @@
+  * Pre-processor Definitions
+  ****************************************************************************/
+ 
+-/* TX timeout = 1 minute */
++/* Retry transient ESP Wi-Fi TX credit exhaustion without monopolizing the
++ * low-priority work queue needed by the Wi-Fi driver.
++ */
+ 
+-#define WLAN_TXTOUT               (60 * CLK_TCK)
++#define WLAN_TXTOUT               MSEC2TICK(100)
+ 
+ /* Low-priority work queue processes RX/TX */
+ 
+@@ -239,7 +241,7 @@ static const struct wlan_ops g_softap_ops =
+ 
+ static struct wlan_pktbuf *wlan_recvframe(struct wlan_priv_s *priv);
+ static struct wlan_pktbuf *wlan_txframe(struct wlan_priv_s *priv);
+-static void wlan_transmit(struct wlan_priv_s *priv);
++static bool wlan_transmit(struct wlan_priv_s *priv);
+ static void wlan_rxpoll(void *arg);
+ static int  wlan_txpoll(struct net_driver_s *dev);
+ static void wlan_dopoll(struct wlan_priv_s *priv);
+@@ -505,18 +507,19 @@ static struct wlan_pktbuf *wlan_txframe(struct wlan_priv_s *priv)
+  * Name: wlan_transmit
+  *
+  * Description:
+- *   Try to send all TX packets in TX ready queue to Wi-Fi driver. If this
+- *    sending fails, then breaks loop and returns.
++ *   Try to send all TX packets in TX ready queue to Wi-Fi driver. If Wi-Fi
++ *   has no TX credits, cache the frame and schedule a short retry.
+  *
+  * Input Parameters:
+  *   priv - Reference to the driver state structure
+  *
+  * Returned Value:
+- *   None
++ *   true if the cached TX queue was drained; false if TX is temporarily
++ *   blocked.
+  *
+  ****************************************************************************/
+ 
+-static void wlan_transmit(struct wlan_priv_s *priv)
++static bool wlan_transmit(struct wlan_priv_s *priv)
+ {
+   struct wlan_pktbuf *pktbuf;
+   int ret;
+@@ -524,12 +527,18 @@ static void wlan_transmit(struct wlan_priv_s *priv)
+   while ((pktbuf = wlan_txframe(priv)))
+     {
+       ret = priv->ops->send(pktbuf->buffer, pktbuf->len);
++
+       if (ret == -ENOMEM)
+         {
++          /* The vendor driver did not accept this frame.  Preserve its
++           * ownership and retry after a TX-done notification or, if no
++           * frame is currently in flight, after the watchdog fallback.
++           */
++
+           wlan_add_txpkt_head(priv, pktbuf);
+           wd_start(&priv->txtimeout, WLAN_TXTOUT,
+                    wlan_txtimeout_expiry, (uint32_t)priv);
+-          break;
++          return false;
+         }
+       else
+         {
+@@ -541,6 +550,14 @@ static void wlan_transmit(struct wlan_priv_s *priv)
+           wlan_free_buffer(priv, pktbuf->buffer);
+         }
+     }
++
++  /* Cancel the fallback only after the serialized worker observes that the
++   * cached queue has really drained.  wlan_tx_done() deliberately leaves it
++   * armed until this point.
++   */
++
++  wd_cancel(&priv->txtimeout);
++  return true;
+ }
+ 
+ /****************************************************************************
+@@ -560,7 +577,10 @@ static void wlan_transmit(struct wlan_priv_s *priv)
+ 
+ static void wlan_tx_done(struct wlan_priv_s *priv)
+ {
+-  wd_cancel(&priv->txtimeout);
++  /* Keep txtimeout armed until a serialized worker observes that txb has
++   * drained.  It remains the fallback when no accepted frame is in flight
++   * to produce another TX-done notification.
++   */
+ 
+   wlan_txavail(&priv->dev);
+ }
+@@ -663,16 +683,26 @@ static void wlan_rxpoll(void *arg)
+   uint32_t rbytes = 0;
+ #endif
+ 
+-  /* Try to send all cached TX packets for TX ack and so on */
++  /* Serialize TX queue/watchdog state with the other WLAN workers and with
++   * interface shutdown.  A queued RX worker must not transmit after stop.
++   */
++
++  net_lock();
++
++  if (!priv->ifup)
++    {
++      net_unlock();
++      return;
++    }
++
++  /* Try to send all cached TX packets for TX ACKs and so on. */
+ 
+   wlan_transmit(priv);
+ 
+-  /* Loop while while wlan_recvframe() successfully retrieves valid
+-   * Ethernet frames.
++  /* Loop while wlan_recvframe() successfully retrieves valid Ethernet
++   * frames.
+    */
+ 
+-  net_lock();
+-
+   while ((pktbuf = wlan_recvframe(priv)) != NULL)
+     {
+       dev->d_buf = pktbuf->buffer;
+@@ -811,6 +841,17 @@ static void wlan_rxpoll(void *arg)
+           net_unlock();
+           rbytes = 0;
+           net_lock();
++
++          /* Interface shutdown may have completed while yielding the
++           * network lock.  Do not continue processing or transmit after
++           * the vendor interface has stopped.
++           */
++
++          if (!priv->ifup)
++            {
++              net_unlock();
++              return;
++            }
+         }
+ #endif
+     }
+@@ -943,18 +984,27 @@ static void wlan_txtimeout_work(void *arg)
+ {
+   struct wlan_priv_s *priv = (struct wlan_priv_s *)arg;
+ 
+-  /* Try to send all cached TX packets */
+-
+-  wlan_transmit(priv);
++  /* Serialize transmission with interface shutdown and every other WLAN
++   * worker.  This also makes the txb-empty/watchdog-cancel decision atomic
++   * with respect to another worker requeueing an -ENOMEM frame.
++   */
+ 
+   net_lock();
+ 
+-  wlan_ifdown(&priv->dev);
+-  wlan_ifup(&priv->dev);
++  if (!priv->ifup)
++    {
++      net_unlock();
++      return;
++    }
+ 
+-  /* Then poll for new XMIT data */
++  /* Retry the cached frame.  wlan_transmit() rearms the watchdog if ESP
++   * Wi-Fi still has no TX credits.  Poll only after the queue drains.
++   */
+ 
+-  wlan_dopoll(priv);
++  if (wlan_transmit(priv))
++    {
++      wlan_dopoll(priv);
++    }
+ 
+   net_unlock();
+ }
+@@ -963,8 +1013,8 @@ static void wlan_txtimeout_work(void *arg)
+  * Function: wlan_txtimeout_expiry
+  *
+  * Description:
+- *   Our TX watchdog timed out.  Called from the timer callback handler.
+- *   The last TX never completed.  Reset the hardware and start again.
++ *   Retry transmission after the Wi-Fi driver remained out of TX resources
++ *   without delivering another TX-done notification.
+  *
+  * Input Parameters:
+  *   argc - The number of available arguments
+@@ -978,12 +1028,33 @@ static void wlan_txtimeout_work(void *arg)
+ static void wlan_txtimeout_expiry(wdparm_t arg)
+ {
+   struct wlan_priv_s *priv = (struct wlan_priv_s *)arg;
++  int ret;
+ 
+-  /* Schedule to perform the TX timeout processing on the worker thread. */
++  /* Schedule TX retry work.  A one-shot watchdog can expire while the
++   * previous timeout work is still queued or finishing.  Dropping that
++   * expiry can strand an -ENOMEM frame forever when no accepted frame is
++   * left in flight to generate another TX-done callback.  Keep retrying the
++   * scheduling operation until the worker becomes available.
++   */
+ 
+-  if (work_available(&priv->toutwork))
++  if (!priv->ifup)
+     {
+-      work_queue(WLAN_WORK, &priv->toutwork, wlan_txtimeout_work, priv, 0);
++      return;
++    }
++
++  if (!work_available(&priv->toutwork))
++    {
++      wd_start(&priv->txtimeout, WLAN_TXTOUT,
++               wlan_txtimeout_expiry, arg);
++      return;
++    }
++
++  ret = work_queue(WLAN_WORK, &priv->toutwork,
++                   wlan_txtimeout_work, priv, 0);
++  if (ret < 0)
++    {
++      wd_start(&priv->txtimeout, WLAN_TXTOUT,
++               wlan_txtimeout_expiry, arg);
+     }
+ }
+ 
+@@ -1008,24 +1079,21 @@ static void wlan_txavail_work(void *arg)
+ {
+   struct wlan_priv_s *priv = (struct wlan_priv_s *)arg;
+ 
+-  /* Try to send all cached TX packets even if net is down */
+-
+-  wlan_transmit(priv);
+-
+-  /* Lock the network and serialize driver operations if necessary.
+-   * NOTE: Serialization is only required in the case where the driver work
+-   * is performed on an LP worker thread and where more than one LP worker
+-   * thread has been configured.
++  /* Serialize transmission with interface shutdown and every other WLAN
++   * worker.  Do not poll TCP for more frames while ESP Wi-Fi is out of TX
++   * credits.
+    */
+ 
+   net_lock();
+ 
+-  /* Ignore the notification if the interface is not yet up */
+-
+-  if (priv->ifup)
++  if (!priv->ifup)
+     {
+-      /* Poll the network for new XMIT data */
++      net_unlock();
++      return;
++    }
+ 
++  if (wlan_transmit(priv))
++    {
+       wlan_dopoll(priv);
+     }
+ 
+diff --git a/boards/xtensa/esp32s3/common/src/esp32s3_board_sdmmc.c b/boards/xtensa/esp32s3/common/src/esp32s3_board_sdmmc.c
+index 7378b527a41..6117b962695 100644
+--- a/boards/xtensa/esp32s3/common/src/esp32s3_board_sdmmc.c
++++ b/boards/xtensa/esp32s3/common/src/esp32s3_board_sdmmc.c
+@@ -26,6 +26,8 @@
+ 
+ #include <nuttx/config.h>
+ 
++#include <sys/stat.h>
++#include <unistd.h>
+ #include <syslog.h>
+ #include <debug.h>
+ 
+@@ -33,6 +35,10 @@
+ #include <nuttx/mmcsd.h>
+ 
+ extern struct sdio_dev_s *sdio_initialize(int slotno);
++
++#define ESP32S3_SDMMC_DEVPATH         "/dev/mmcsd1"
++#define ESP32S3_SDMMC_PROBE_RETRIES   15
++#define ESP32S3_SDMMC_PROBE_DELAY_US  500000
+ /****************************************************************************
+  * Public Functions
+  ****************************************************************************/
+@@ -55,6 +61,8 @@ extern struct sdio_dev_s *sdio_initialize(int slotno);
+ int board_sdmmc_initialize(void)
+ {
+   struct sdio_dev_s *sdio;
++  struct stat st;
++  int retry;
+   int rv;
+ 
+   sdio = sdio_initialize(1);
+@@ -67,9 +75,39 @@ int board_sdmmc_initialize(void)
+   rv = mmcsd_slotinitialize(1, sdio);
+   if (rv < 0)
+     {
+-      syslog(LOG_ERR, "Failed to bind SPI port to SD slot\n");
++      syslog(LOG_ERR, "Failed to bind SDIO port to SD slot: %d\n", rv);
+       return rv;
+     }
+ 
+-  return OK;
++  /* This board has no separate card-detect GPIO; the controller card-
++   * detect input is tied to the present state.  If the first identification
++   * attempt fails there can be no later insertion edge to trigger another
++   * probe.  Re-enable the existing media callback instead of initializing
++   * another SDIO/MMCSD instance.
++   */
++
++  for (retry = 0; retry <= ESP32S3_SDMMC_PROBE_RETRIES; retry++)
++    {
++      if (stat(ESP32S3_SDMMC_DEVPATH, &st) == 0)
++        {
++          if (retry > 0)
++            {
++              syslog(LOG_INFO, "SD card ready after %d reprobes\n", retry);
++            }
++
++          return OK;
++        }
++
++      if (retry == ESP32S3_SDMMC_PROBE_RETRIES)
++        {
++          break;
++        }
++
++      usleep(ESP32S3_SDMMC_PROBE_DELAY_US);
++      SDIO_CALLBACKENABLE(sdio, SDIOMEDIA_INSERTED);
++    }
++
++  syslog(LOG_ERR, "SD card probe failed after %d retries\n",
++         ESP32S3_SDMMC_PROBE_RETRIES);
++  return -ENODEV;
+ }
+diff --git a/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_appinit.c b/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_appinit.c
+index c582f0959c1..b4fc3ab0ce7 100644
+--- a/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_appinit.c
++++ b/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_appinit.c
+@@ -28,11 +28,18 @@
+ 
+ #include <sys/types.h>
+ #include <nuttx/board.h>
++#include <sched.h>
++#include <syslog.h>
++#include <errno.h>
+ 
+ #include "esp32s3-eye.h"
+ 
+ #ifdef CONFIG_BOARDCTL
+ 
++#ifdef CONFIG_EXAMPLES_CAMERA_GALLERY_AUTOSTART
++extern int camera_gallery_main(int argc, FAR char *argv[]);
++#endif
++
+ /****************************************************************************
+  * Pre-processor Definitions
+  ****************************************************************************/
+@@ -73,9 +80,28 @@ int board_app_initialize(uintptr_t arg)
+ 
+   return OK;
+ #else
+-  /* Perform board-specific initialization */
++  int ret;
++
++  /* Perform board-specific initialization before starting applications. */
++
++  ret = esp32s3_bringup();
++  if (ret < 0)
++    {
++      return ret;
++    }
+ 
+-  return esp32s3_bringup();
++#ifdef CONFIG_EXAMPLES_CAMERA_GALLERY_AUTOSTART
++  ret = task_create("camera_gallery",
++                    CONFIG_EXAMPLES_CAMERA_GALLERY_PRIORITY,
++                    CONFIG_EXAMPLES_CAMERA_GALLERY_STACKSIZE,
++                    camera_gallery_main, NULL);
++  if (ret < 0)
++    {
++      syslog(LOG_ERR, "camera_gallery autostart failed: %d\n", errno);
++    }
++#endif
++
++  return OK;
+ #endif
+ }
+ 
+diff --git a/drivers/lcd/st7789.c b/drivers/lcd/st7789.c
+index e8f6c3ea6a7..d6d9ba9262f 100644
+--- a/drivers/lcd/st7789.c
++++ b/drivers/lcd/st7789.c
+@@ -1015,6 +1015,13 @@ FAR struct lcd_dev_s *st7789_lcdinitialize(FAR struct spi_dev_s *spi)
+   g_lcddev.yoff = yoff;
+ #endif
+ 
++  /* The LCD is not necessarily power-cycled when the MCU resets.  Put the
++   * controller into a known state before applying the remaining setup.
++   */
++
++  st7789_sendcmd(priv, ST7789_SWRESET);
++  up_mdelay(150);
++
+   /* Init the hardware and clear the display */
+ 
+   st7789_sleep(priv, false);
+diff --git a/drivers/mmcsd/mmcsd_sdio.c b/drivers/mmcsd/mmcsd_sdio.c
+index 49023628ea2..33c8f2d51cd 100644
+--- a/drivers/mmcsd/mmcsd_sdio.c
++++ b/drivers/mmcsd/mmcsd_sdio.c
+@@ -2676,6 +2676,8 @@ static void mmcsd_mediachange(FAR void *arg)
+       return;
+     }
+ 
++  printf("[mmcsd] mediachange: present=%d\n", !!SDIO_PRESENT(priv->dev));
++
+   if (SDIO_PRESENT(priv->dev))
+     {
+       /* Yes... process the card insertion.  This could cause chaos if we
+@@ -3868,8 +3870,14 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+   clock_t start;
+   clock_t elapsed;
+   int ret;
++  uint32_t lastocr = 0;
++  int n_iter = 0;
++  int n_cmd55fail = 0;
++  int n_acmd41fail = 0;
++  int cmd8ret = -9999;
+ 
+   finfo("Identifying card...\n");
++  printf("[mmcsd] identify attempt\n");
+ 
+   /* Assume failure to identify the card */
+ 
+@@ -3996,6 +4004,8 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+           ret = SDIO_RECVR7(priv->dev, SD_CMD8, &response);
+         }
+ 
++      cmd8ret = ret;
++
+       /* Were both the command sent and response received correctly? */
+ 
+       if (ret == OK)
+@@ -4034,6 +4044,8 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+        * an earlier pass through this loop.  In that case, we should
+        * skip the SD-specific commands.
+        */
++
++      n_iter++;
+ #ifdef CONFIG_MMCSD_MMCSUPPORT
+       if (!IS_MMC(priv->type))
+ #endif
+@@ -4051,6 +4063,7 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+                */
+ 
+               ferr("ERROR: mmcsd_recv_r1(CMD55) failed: %d\n", ret);
++              n_cmd55fail++;
+             }
+           else
+             {
+@@ -4068,6 +4081,7 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+                    */
+ 
+                   ferr("ERROR: ACMD41 RECVR3: %d\n", ret);
++                  n_acmd41fail++;
+                 }
+               else
+                 {
+@@ -4078,6 +4092,7 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+                    */
+ 
+                   finfo("R3: %08" PRIx32 "\n", response);
++                  lastocr = response;
+                   if (priv->type == MMCSD_CARDTYPE_UNKNOWN)
+                     {
+                       finfo("SD V1.x card\n");
+@@ -4210,6 +4225,10 @@ static int mmcsd_cardidentify(FAR struct mmcsd_state_s *priv)
+ 
+   if (elapsed >= TICK_PER_SEC || priv->type == MMCSD_CARDTYPE_UNKNOWN)
+     {
++      printf("[mmcsd] identify FAIL: type=%d iter=%d cmd8=%d "
++             "cmd55fail=%d acmd41fail=%d lastocr=%08" PRIx32 "\n",
++             priv->type, n_iter, cmd8ret, n_cmd55fail, n_acmd41fail,
++             lastocr);
+       priv->type = MMCSD_CARDTYPE_UNKNOWN;
+       ferr("ERROR: Failed to identify card\n");
+       return -EIO;
+@@ -4270,6 +4289,7 @@ static int mmcsd_probe(FAR struct mmcsd_state_s *priv)
+       ret = mmcsd_cardidentify(priv);
+       if (ret != OK)
+         {
++          printf("[mmcsd] cardidentify failed: %d\n", ret);
+           ferr("ERROR: Failed to initialize card: %d\n", ret);
+         }
+       else
+@@ -4332,6 +4352,11 @@ static int mmcsd_probe(FAR struct mmcsd_state_s *priv)
+                                    priv->blockshift));
+               priv->mediachanged = true;
+             }
++          else
++            {
++              printf("[mmcsd] initialize (type %d) failed: %d\n",
++                     priv->type, ret);
++            }
+ 
+           /* When the card is identified, we have probed this card */
+ 
+@@ -4366,6 +4391,7 @@ static int mmcsd_probe(FAR struct mmcsd_state_s *priv)
+     {
+       /* There is no card in the slot */
+ 
++      printf("[mmcsd] probe: no card (status)\n");
+       finfo("No card\n");
+ #ifdef CONFIG_MMCSD_HAVE_CARDDETECT
+       SDIO_CALLBACKENABLE(priv->dev, SDIOMEDIA_INSERTED);
+@@ -4391,6 +4417,8 @@ static int mmcsd_removed(FAR struct mmcsd_state_s *priv)
+   char devname[32];
+   int i;
+ 
++  printf("[mmcsd] removed (present=%d type=%d)\n",
++         !!SDIO_PRESENT(priv->dev), priv->type);
+   finfo("type: %d present: %d\n", priv->type, SDIO_PRESENT(priv->dev));
+ 
+   for (i = 0; i < MMCSD_PART_COUNT; i++)
+diff --git a/drivers/sensors/qma7981.c b/drivers/sensors/qma7981.c
+index edaced4e447..034f92f8c66 100644
+--- a/drivers/sensors/qma7981.c
++++ b/drivers/sensors/qma7981.c
+@@ -31,6 +31,7 @@
+ #include <errno.h>
+ #include <debug.h>
+ 
++#include <nuttx/arch.h>
+ #include <nuttx/kmalloc.h>
+ #include <nuttx/fs/fs.h>
+ #include <nuttx/i2c/i2c_master.h>
+@@ -68,13 +69,13 @@
+ 
+ #define QMA7981_BW_52HZ             0xe2
+ 
+-/* Valid CHIP_ID range observed across silicon revisions e0..e9.
+- * Datasheet does not publish a fixed value; we accept this range to
+- * tolerate v1 (0xe0..0xe7) and v2 (0xe8..0xe9) parts.
++/* Valid CHIP_ID values.  ESP32-S3-EYE board revisions may contain either
++ * QMA7981 (0xe0..0xe9) or the register-compatible QMA6100P (0x90).
+  */
+ 
+ #define QMA7981_CHIP_ID_MIN         0xe0
+ #define QMA7981_CHIP_ID_MAX         0xe9
++#define QMA6100P_CHIP_ID            0x90
+ 
+ #define QMA7981_I2C_FREQUENCY       400000
+ 
+@@ -178,36 +179,92 @@ static int qma7981_write_reg(FAR struct qma7981_dev_s *priv,
+ static int qma7981_chip_init(FAR struct qma7981_dev_s *priv)
+ {
+   uint8_t chip_id = 0;
++  uint8_t power_mode = 0;
+   int ret;
+ 
+-  /* Read CHIP_ID to confirm the device responds */
++  /* Read CHIP_ID to confirm the device responds. */
+ 
+   ret = qma7981_read_reg(priv, QMA7981_REG_CHIP_ID, &chip_id, 1);
+   if (ret < 0)
+     {
+-      snerr("ERROR: failed to read QMA7981 CHIP_ID\n");
++      snerr("ERROR: failed to read QMA accelerometer CHIP_ID\n");
+       return ret;
+     }
+ 
+-  if (chip_id < QMA7981_CHIP_ID_MIN || chip_id > QMA7981_CHIP_ID_MAX)
++  if ((chip_id < QMA7981_CHIP_ID_MIN ||
++       chip_id > QMA7981_CHIP_ID_MAX) &&
++      chip_id != QMA6100P_CHIP_ID)
+     {
+-      snerr("ERROR: unexpected QMA7981 CHIP_ID 0x%02x\n", chip_id);
++      snerr("ERROR: unsupported QMA accelerometer CHIP_ID 0x%02x\n",
++            chip_id);
+       return -ENODEV;
+     }
+ 
+-  sninfo("QMA7981 detected, CHIP_ID=0x%02x\n", chip_id);
++  sninfo("%s detected, CHIP_ID=0x%02x\n",
++         chip_id == QMA6100P_CHIP_ID ? "QMA6100P" : "QMA7981",
++         chip_id);
+ 
+-  /* Soft-reset: write trigger then release. */
++  /* Both supported parts use the same basic register map.  A reset needs
++   * several milliseconds to reload NVM; writing configuration immediately
++   * after the reset can otherwise leave the device in standby.
++   */
++
++  ret = qma7981_write_reg(priv, QMA7981_REG_SR,
++                          QMA7981_SOFT_RESET_TRIGGER);
++  if (ret < 0)
++    {
++      return ret;
++    }
++
++  up_mdelay(5);
++  ret = qma7981_write_reg(priv, QMA7981_REG_SR,
++                          QMA7981_SOFT_RESET_RELEASE);
++  if (ret < 0)
++    {
++      return ret;
++    }
++
++  up_mdelay(10);
++
++  /* Configure the range and bandwidth in standby, then enter active mode. */
++
++  ret = qma7981_write_reg(priv, QMA7981_REG_FSR, QMA7981_FSR_8G);
++  if (ret < 0)
++    {
++      return ret;
++    }
++
++  ret = qma7981_write_reg(priv, QMA7981_REG_BW, QMA7981_BW_52HZ);
++  if (ret < 0)
++    {
++      return ret;
++    }
+ 
+-  qma7981_write_reg(priv, QMA7981_REG_SR, QMA7981_SOFT_RESET_TRIGGER);
+-  up_udelay(100);
+-  qma7981_write_reg(priv, QMA7981_REG_SR, QMA7981_SOFT_RESET_RELEASE);
++  ret = qma7981_write_reg(priv, QMA7981_REG_PM,
++                          QMA7981_PM_ACTIVE_100KHZ);
++  if (ret < 0)
++    {
++      return ret;
++    }
+ 
+-  /* Configure: active mode, ±8 g range, ~52 Hz ODR */
++  up_mdelay(2);
+ 
+-  qma7981_write_reg(priv, QMA7981_REG_PM,  QMA7981_PM_ACTIVE_100KHZ);
+-  qma7981_write_reg(priv, QMA7981_REG_FSR, QMA7981_FSR_8G);
+-  qma7981_write_reg(priv, QMA7981_REG_BW,  QMA7981_BW_52HZ);
++  /* Read the power register back so a silently rejected active-mode write
++   * cannot produce a registered device that returns permanent zeroes.
++   */
++
++  ret = qma7981_read_reg(priv, QMA7981_REG_PM, &power_mode, 1);
++  if (ret < 0)
++    {
++      return ret;
++    }
++
++  if ((power_mode & QMA7981_PM_ACTIVE_100KHZ) == 0)
++    {
++      snerr("ERROR: QMA accelerometer did not enter active mode "
++            "(PM=0x%02x)\n", power_mode);
++      return -EIO;
++    }
+ 
+   return OK;
+ }
+@@ -290,11 +347,9 @@ int qma7981_register(FAR const char *devpath,
+   ret = qma7981_chip_init(priv);
+   if (ret < 0)
+     {
+-      snwarn("WARNING: QMA7981 not detected on bus (errno %d).  "
+-             "Driver will register but read() will fail with EIO.  "
+-             "Check that the EYE board has the accelerometer "
+-             "populated and that I2C0 (SDA=GPIO4, SCL=GPIO5) is "
+-             "wired correctly.\n", ret);
++      snerr("ERROR: QMA accelerometer initialization failed: %d\n", ret);
++      kmm_free(priv);
++      return ret;
+     }
+ 
+   ret = register_driver(devpath, &g_qma7981_fops, 0666, priv);
+diff --git a/drivers/serial/serial.c b/drivers/serial/serial.c
+index 0b530d1d686..fb4fd1e687f 100644
+--- a/drivers/serial/serial.c
++++ b/drivers/serial/serial.c
+@@ -267,6 +267,8 @@ static int uart_putxmitchar(FAR uart_dev_t *dev, int ch, bool oktoblock)
+ 
+       else if (oktoblock)
+         {
++          bool flushed = false;
++
+           /* The following steps must be atomic with respect to serial
+            * interrupt handling.
+            */
+@@ -316,13 +318,41 @@ static int uart_putxmitchar(FAR uart_dev_t *dev, int ch, bool oktoblock)
+ #endif
+               uart_enabletxint(dev);
+               uart_spinunlock(dev, true, flags);
+-              ret = nxsem_wait(&dev->xmitsem);
++
++              if (dev->xmit_timeout > 0)
++                {
++                  ret = nxsem_tickwait(&dev->xmitsem,
++                                       dev->xmit_timeout);
++                }
++              else
++                {
++                  ret = nxsem_wait(&dev->xmitsem);
++                }
++
+               flags = uart_spinlock(dev, true);
+               uart_disabletxint(dev);
++
++              /* A device-specific timeout allows a console whose hardware
++               * peer has stopped consuming data to discard stale output.
++               * This writer still owns xmit.lock, so no producer can race
++               * the flush; the UART spinlock excludes the TX consumer.
++               */
++
++              if (ret == -ETIMEDOUT)
++                {
++                  dev->xmit.tail = dev->xmit.head;
++                  flushed = true;
++                  ret = OK;
++                }
+             }
+ 
+           uart_spinunlock(dev, true, flags);
+ 
++          if (flushed)
++            {
++              uart_datasent(dev);
++            }
++
+ #ifdef CONFIG_SERIAL_REMOVABLE
+           /* Check if the removable device was disconnected while we were
+            * waiting.
+diff --git a/include/nuttx/serial/serial.h b/include/nuttx/serial/serial.h
+index 50a19ae8d85..083effa41bf 100644
+--- a/include/nuttx/serial/serial.h
++++ b/include/nuttx/serial/serial.h
+@@ -320,6 +320,7 @@ struct uart_dev_s
+ #endif
+   bool                 isconsole;    /* true: This is the serial console */
+   bool                 unlinked;     /* true: This device driver has been unlinked. */
++  uint32_t             xmit_timeout; /* TX full wait in ticks; zero waits forever */
+ 
+ #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP) || \
+     defined(CONFIG_TTY_FORCE_PANIC) || defined(CONFIG_TTY_LAUNCH)
+diff --git a/include/nuttx/wireless/bluetooth/bt_gatt.h b/include/nuttx/wireless/bluetooth/bt_gatt.h
+index d523b908a99..2115bb9bf26 100644
+--- a/include/nuttx/wireless/bluetooth/bt_gatt.h
++++ b/include/nuttx/wireless/bluetooth/bt_gatt.h
+@@ -41,6 +41,7 @@
+  ****************************************************************************/
+ 
+ #include <sys/param.h>
++#include <stdbool.h>
+ #include <nuttx/wireless/bluetooth/bt_uuid.h>
+ 
+ /****************************************************************************
+@@ -441,6 +442,9 @@ typedef CODE uint8_t
+ 
+ struct bt_conn_s; /* Forward reference */
+ 
++typedef CODE void (*bt_gatt_connection_func_t)(
++  FAR struct bt_conn_s *conn, bool connected, FAR void *user_data);
++
+ typedef CODE void (*bt_gatt_rsp_func_t)(FAR struct bt_conn_s *conn,
+                    uint8_t err);
+ 
+@@ -645,6 +649,13 @@ struct bt_gatt_discover_params_s
+ 
+ void bt_gatt_register(FAR const struct bt_gatt_attr_s *attrs, size_t count);
+ 
++/* Register one application connection lifecycle callback.  Passing NULL
++ * removes the current callback.  The callback runs in Bluetooth host context
++ * and must not block. */
++
++void bt_gatt_set_connection_callback(bt_gatt_connection_func_t callback,
++                                     FAR void *user_data);
++
+ /****************************************************************************
+  * Name: bt_gatt_foreach_attr
+  *
+diff --git a/wireless/bluetooth/bt_gatt.c b/wireless/bluetooth/bt_gatt.c
+index 2e8d38e7623..c1ac06f9b05 100644
+--- a/wireless/bluetooth/bt_gatt.c
++++ b/wireless/bluetooth/bt_gatt.c
+@@ -40,6 +40,7 @@
+  ****************************************************************************/
+ 
+ #include <nuttx/config.h>
++#include <nuttx/irq.h>
+ 
+ #include <stdbool.h>
+ #include <string.h>
+@@ -88,7 +89,7 @@ struct notify_data_s
+ {
+   FAR const void *data;
+   size_t len;
+-  uint8_t handle;
++  uint16_t handle;
+ };
+ 
+ /****************************************************************************
+@@ -97,6 +98,8 @@ struct notify_data_s
+ 
+ static FAR const struct bt_gatt_attr_s *g_db = NULL;
+ static size_t g_attr_count = 0;
++static bt_gatt_connection_func_t g_connection_callback;
++static FAR void *g_connection_user_data;
+ 
+ /****************************************************************************
+  * Public Functions
+@@ -108,6 +111,34 @@ void bt_gatt_register(FAR const struct bt_gatt_attr_s *attrs, size_t count)
+   g_attr_count = count;
+ }
+ 
++void bt_gatt_set_connection_callback(bt_gatt_connection_func_t callback,
++                                     FAR void *user_data)
++{
++  irqstate_t flags = enter_critical_section();
++
++  g_connection_callback = callback;
++  g_connection_user_data = callback != NULL ? user_data : NULL;
++  leave_critical_section(flags);
++}
++
++static void gatt_report_connection(FAR struct bt_conn_s *conn,
++                                   bool connected)
++{
++  bt_gatt_connection_func_t callback;
++  FAR void *user_data;
++  irqstate_t flags;
++
++  flags = enter_critical_section();
++  callback = g_connection_callback;
++  user_data = g_connection_user_data;
++  leave_critical_section(flags);
++
++  if (callback != NULL)
++    {
++      callback(conn, connected, user_data);
++    }
++}
++
+ int bt_gatt_attr_read(FAR struct bt_conn_s *conn,
+                       FAR const struct bt_gatt_attr_s *attr, FAR void *buf,
+                       uint8_t buf_len, uint16_t offset,
+@@ -416,7 +447,7 @@ static uint8_t notify_cb(FAR const struct bt_gatt_attr_s *attr,
+ 
+       /* TODO: Handle indications */
+ 
+-      if (ccc->value != BT_GATT_CCC_NOTIFY)
++      if (ccc->cfg[i].value != BT_GATT_CCC_NOTIFY)
+         {
+           continue;
+         }
+@@ -508,6 +539,7 @@ void bt_gatt_connected(FAR struct bt_conn_s *conn)
+ {
+   wlinfo("conn %p\n", conn);
+   bt_gatt_foreach_attr(0x0001, 0xffff, connected_cb, conn);
++  gatt_report_connection(conn, true);
+ }
+ 
+ static uint8_t disconnected_cb(FAR const struct bt_gatt_attr_s *attr,
+@@ -535,6 +567,15 @@ static uint8_t disconnected_cb(FAR const struct bt_gatt_attr_s *attr,
+ 
+   for (i = 0; i < ccc->cfg_len; i++)
+     {
++      /* Non-bonded CCC state is valid only for the current connection. */
++
++      if (!ccc->cfg[i].valid &&
++          !bt_addr_le_cmp(&conn->dst, &ccc->cfg[i].peer))
++        {
++          memset(&ccc->cfg[i], 0, sizeof(ccc->cfg[i]));
++          continue;
++        }
++
+       /* Ignore configurations with disabled value */
+ 
+       if (!ccc->cfg[i].value)
+@@ -570,6 +611,7 @@ void bt_gatt_disconnected(FAR struct bt_conn_s *conn)
+ {
+   wlinfo("conn %p\n", conn);
+   bt_gatt_foreach_attr(0x0001, 0xffff, disconnected_cb, conn);
++  gatt_report_connection(conn, false);
+ }
+ 
+ static void gatt_mtu_rsp(FAR struct bt_conn_s *conn, uint8_t err,
