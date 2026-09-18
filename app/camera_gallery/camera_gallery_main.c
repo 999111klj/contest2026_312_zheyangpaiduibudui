@@ -1269,6 +1269,19 @@ int main(int argc, FAR char *argv[])
     }
 #endif
 
+#if defined(CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD) && \
+    defined(CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR)
+  /* Publish the vlog-assistant skill for the on-device AI agent
+   * (packages/ai_agent); the agent loads skills from its data directory
+   * when a conversation starts.
+   */
+
+  if (app.sd_ready && camera_gallery_aivlog_install_skill() < 0)
+    {
+      printf("camera_gallery: AI agent skill install failed: %d\n", errno);
+    }
+#endif
+
 #ifdef CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_PROVISION
   /* Provisioning owns config/network access and must start before the cloud
    * queue.  BLE availability is optional; initialization failure does not

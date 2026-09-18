@@ -2309,6 +2309,193 @@ int camera_gallery_aivlog_cloud_configure(FAR const char *scheme,
   return OK;
 }
 
+/* Count the on-card work the uploader has not finished yet: sessions that
+ * are neither complete nor discarded, photos still waiting for their turn
+ * and photos whose upload failed permanently.
+ */
+
+static int aivlog_cloud_count_pending(FAR unsigned int *pending_sessions,
+                                      FAR unsigned int *pending_photos,
+                                      FAR unsigned int *failed_photos)
+{
+  struct aivlog_cloud_manifest_s manifest;
+  char root[AIVLOG_CLOUD_PATH_SIZE];
+  FAR struct dirent *entry;
+  FAR DIR *directory;
+  uint32_t session_id;
+  unsigned int sessions = 0;
+  unsigned int waiting = 0;
+  unsigned int failed = 0;
+  int i;
+
+  *pending_sessions = 0;
+  *pending_photos = 0;
+  *failed_photos = 0;
+
+  if (aivlog_cloud_root_path(root, sizeof(root)) < 0)
+    {
+      return ERROR;
+    }
+
+  directory = opendir(root);
+  if (directory == NULL)
+    {
+      return ERROR;
+    }
+
+  while ((entry = readdir(directory)) != NULL)
+    {
+      if (!aivlog_cloud_session_name(entry->d_name, &session_id) ||
+          aivlog_cloud_read_manifest(session_id, &manifest) < 0 ||
+          manifest.state == AIVLOG_CLOUD_STATE_COMPLETE ||
+          manifest.state == AIVLOG_CLOUD_STATE_DISCARDED)
+        {
+          continue;
+        }
+
+      sessions++;
+      for (i = 0; i < manifest.asset_count; i++)
+        {
+          if (manifest.assets[i].uploaded)
+            {
+              continue;
+            }
+
+          if (manifest.assets[i].failed)
+            {
+              failed++;
+            }
+          else
+            {
+              waiting++;
+            }
+        }
+    }
+
+  closedir(directory);
+  *pending_sessions = sessions;
+  *pending_photos = waiting;
+  *failed_photos = failed;
+  return OK;
+}
+
+#ifdef CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR
+
+/* Skill definition published for the on-device AI agent (packages/
+ * ai_agent).  The agent loads markdown skills from its data directory
+ * when a conversation starts; the camera app installs this file once
+ * the SD card is available so "vlog-assistant" is always present.
+ */
+
+static const char g_aivlog_skill_text[] =
+  "# Vlog Assistant\n"
+  "\n"
+  "Check the AI Vlog camera's session, upload queue and cloud video "
+  "generation status.\n"
+  "\n"
+  "## When to use\n"
+  "When the user asks about the vlog camera: photos, capture sessions, "
+  "uploads, queue or video generation.\n"
+  "触发词：vlog、视频、照片、上传、队列、成片、拍摄状态、相册。\n"
+  "\n"
+  "## How to use\n"
+  "1. Run the shell command: camera_gallery aivlog_cloud_status\n"
+  "2. Read the output lines:\n"
+  "   - \"AI Vlog backend\" — cloud service and credentials\n"
+  "   - \"Session\" — current capture session\n"
+  "   - \"Pending\" — photos waiting for upload and failed uploads\n"
+  "   - \"Upload worker\" — upload worker and retry backoff\n"
+  "3. Answer the question using the relevant line(s). \"retry N\" means "
+  "exponential backoff before the next attempt (5 s doubling up to "
+  "300 s). The queue uploads itself once the network is available; no "
+  "user action is needed. Cloud videos are generated automatically "
+  "after a session finishes.\n"
+  "\n"
+  "## Output format\n"
+  "Use Chinese by default, be concise. Examples:\n"
+  "- 「还有 2 张照片待上传（1 个会话），上传服务运行中」\n"
+  "- 「当前没有待上传的照片」\n"
+  "- 「尚未配置云端后端，照片仅保存在 SD 卡」\n"
+  "\n"
+  "## Example\n"
+  "User: \"我的照片传完了吗\"\n"
+  "→ shell: camera_gallery aivlog_cloud_status\n"
+  "→ AI Vlog backend: https://192.168.1.10:443/api/v1/aivlog "
+  "(credentials configured)\n"
+  "→ Session: 12 (active, accepting photos)\n"
+  "→ Pending: 2 photo(s) to upload in 1 session(s), 0 failed\n"
+  "→ Upload worker: running, retry 0\n"
+  "→ 「还有 2 张照片待上传（会话 12 正在拍摄中），结束后会自动上传"
+  "并在云端生成视频。」\n";
+
+int camera_gallery_aivlog_install_skill(void)
+{
+  char dir_path[PATH_MAX];
+  char skill_path[PATH_MAX];
+  FAR char *existing;
+  FILE *stream;
+  long length;
+  size_t text_length = sizeof(g_aivlog_skill_text) - 1;
+
+  /* The agent creates its data directory on first run; the camera may
+   * start first, so create both levels and tolerate EEXIST.
+   */
+
+  mkdir(CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR, 0775);
+  snprintf(dir_path, sizeof(dir_path), "%s/skills",
+           CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR);
+  mkdir(dir_path, 0775);
+
+  snprintf(skill_path, sizeof(skill_path), "%s/vlog-assistant.md",
+           dir_path);
+
+  stream = fopen(skill_path, "r");
+  if (stream != NULL)
+    {
+      fseek(stream, 0, SEEK_END);
+      length = ftell(stream);
+      if (length == (long)text_length)
+        {
+          existing = malloc(text_length);
+          if (existing != NULL)
+            {
+              fseek(stream, 0, SEEK_SET);
+              if (fread(existing, 1, text_length, stream) == text_length &&
+                  memcmp(existing, g_aivlog_skill_text, text_length) == 0)
+                {
+                  free(existing);
+                  fclose(stream);
+                  return OK;  /* same version already installed */
+                }
+
+              free(existing);
+            }
+        }
+
+      fclose(stream);
+    }
+
+  stream = fopen(skill_path, "w");
+  if (stream == NULL)
+    {
+      printf("[aivlog-cloud] skill install failed: %d\n", errno);
+      return ERROR;
+    }
+
+  if (fwrite(g_aivlog_skill_text, 1, text_length, stream) != text_length)
+    {
+      printf("[aivlog-cloud] skill write failed: %d\n", errno);
+      fclose(stream);
+      return ERROR;
+    }
+
+  fclose(stream);
+  printf("[aivlog-cloud] installed AI agent skill: %s\n", skill_path);
+  return OK;
+}
+
+#endif /* CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR */
+
 int camera_gallery_aivlog_cloud_command(int argc, FAR char *argv[])
 {
   struct aivlog_cloud_config_s config;
@@ -2392,6 +2579,10 @@ int camera_gallery_aivlog_cloud_command(int argc, FAR char *argv[])
 
   if (argc == 2 && strcmp(argv[1], "aivlog_cloud_status") == 0)
     {
+      unsigned int pending_sessions = 0;
+      unsigned int pending_photos = 0;
+      unsigned int failed_photos = 0;
+
       if (config_store_init() < 0 || aivlog_cloud_load_config(&config) < 0)
         {
           printf("AI Vlog backend: not configured (local queue only)\n");
@@ -2402,6 +2593,40 @@ int camera_gallery_aivlog_cloud_command(int argc, FAR char *argv[])
                  "(credentials configured)\n",
                  config.scheme, config.host, config.port, config.base_path);
         }
+
+      /* Advisory snapshot; the worker owns these fields but a stale or
+       * torn value only affects the report, never the uploader.
+       */
+
+      if (g_aivlog_cloud.current_active)
+        {
+          printf("Session: %" PRIu32 " (%s)\n",
+                 g_aivlog_cloud.current_session,
+                 g_aivlog_cloud.current_accepting ?
+                   "active, accepting photos" : "active, finishing");
+        }
+      else
+        {
+          printf("Session: none\n");
+        }
+
+      if (aivlog_cloud_count_pending(&pending_sessions, &pending_photos,
+                                     &failed_photos) < 0)
+        {
+          printf("Pending: unknown (queue directory unavailable)\n");
+        }
+      else
+        {
+          printf("Pending: %u photo(s) to upload in %u session(s), "
+                 "%u failed\n",
+                 pending_photos, pending_sessions, failed_photos);
+        }
+
+      printf("Upload worker: %s, retry %u\n",
+             g_aivlog_cloud.cloud_blocked ?
+               "blocked (credentials rejected)" :
+               g_aivlog_cloud.thread_started ? "running" : "stopped",
+             g_aivlog_cloud.retry_count);
 
       return EXIT_SUCCESS;
     }

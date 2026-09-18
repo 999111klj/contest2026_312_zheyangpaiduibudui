@@ -128,6 +128,8 @@ camera_gallery aivlog_cloud_status    # 查看配置状态
 
 使用：LCD 实时取景（NIMA 每 800 ms 评分，≥85 自动入队）→ **PLAY 键**拍摄存档 / **MENU 键**结束会话 → worker 自动连接 WiFi、TLS 上传 → 云端约 80-90 秒成片（`GET /api/v1/aivlog/sessions` 查询、`/result.mp4` 下载）。离线时拍摄与入队不受影响，回网自动补传。
 
+**板载 AI 助手（自定义 Skill）**：应用启动时自动向板载 AI agent（packages/ai_agent）安装 `vlog-assistant` 技能（写入 `/mnt/sd/.ai_agent/skills/`，内容变更自动更新）。nsh 下运行 `ai_agent` 进入对话后可直接问「我的照片传完了吗」「上传队列什么状态」——agent 按技能指引调用 `camera_gallery aivlog_cloud_status`（已加入其 shell 白名单），用中文归纳会话、待传照片数与重试退避状态。
+
 ### 4.6 已验证结果（2026-09-17 实测）
 
 | 会话 | 入队照片（NIMA 分） | 上传 | 视频生成 | AI 字幕示例 |
@@ -149,5 +151,5 @@ camera_gallery aivlog_cloud_status    # 查看配置状态
 ## 六、附：openvela 能力落地
 
 - **图形**：NX 图形栈 + ST7789 LCD 取景与中文 UI（自建中文字库）；
-- **AI**：TFLite Micro 端侧推理（NIMA int8）+ ai_agent 框架 LLM 通道（云端 MiMo mimo-v2.5）；
+- **AI**：TFLite Micro 端侧推理（NIMA int8）+ ai_agent 框架 LLM 通道（云端 MiMo mimo-v2.5）+ 自定义 `vlog-assistant` Skill（agent 经 shell 白名单调用设备状态命令，自然语言查询拍摄/上传/成片进度）；
 - **多媒体**：OV2640 捕获（LEDC XCLK）、BMP 编码、SD FAT 存储、FFmpeg 渲染成片。
