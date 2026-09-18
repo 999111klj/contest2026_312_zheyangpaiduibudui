@@ -1,0 +1,700 @@
+diff --git a/boards/esp32s3/esp32s3-eye/configs/openvela/defconfig b/boards/esp32s3/esp32s3-eye/configs/openvela/defconfig
+index 4338be7..af1a7fe 100644
+--- a/boards/esp32s3/esp32s3-eye/configs/openvela/defconfig
++++ b/boards/esp32s3/esp32s3-eye/configs/openvela/defconfig
+@@ -5,8 +5,15 @@
+ # You can then do "make savedefconfig" to generate a new defconfig file that includes your
+ # modifications.
+ #
++# CONFIG_AI_AGENT_FEISHU is not set
++# CONFIG_AI_AGENT_MCP is not set
++# CONFIG_AI_AGENT_MQTT is not set
++# CONFIG_AI_AGENT_NODE is not set
++# CONFIG_AI_AGENT_WEIXIN is not set
+ # CONFIG_ARCH_LEDS is not set
+ # CONFIG_ESP32S3_I2S0_TX is not set
++# CONFIG_NXFONTS_DISABLE_16BPP is not set
++# CONFIG_NX_DISABLE_16BPP is not set
+ # CONFIG_NSH_ARGCAT is not set
+ # CONFIG_NSH_CMDOPT_HEXDUMP is not set
+ CONFIG_ALLOW_BSD_COMPONENTS=y
+@@ -31,6 +38,8 @@ CONFIG_BOARD_CUSTOM_LEDS=y
+ CONFIG_BOARD_LOOPSPERMSEC=16717
+ CONFIG_BTSAK=y
+ CONFIG_BUILTIN=y
++CONFIG_CRYPTO_MBEDTLS=y
++CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=y
+ CONFIG_DEBUG_FULLOPT=y
+ CONFIG_DEBUG_SYMBOLS=y
+ CONFIG_DEFAULT_TASK_STACKSIZE=4096
+@@ -38,6 +47,9 @@ CONFIG_DRIVERS_AUDIO=y
+ CONFIG_DRIVERS_BLUETOOTH=y
+ CONFIG_DRIVERS_IEEE80211=y
+ CONFIG_DRIVERS_WIRELESS=y
++CONFIG_ESP32S3_ADC=y
++CONFIG_ESP32S3_ADC1_CHANNEL0=y
++CONFIG_ESP32S3_ADC_VOL_3100=y
+ CONFIG_ESP32S3_BLE=y
+ CONFIG_ESP32S3_CAM=y
+ CONFIG_ESP32S3_EYE_LCD=y
+@@ -59,23 +71,52 @@ CONFIG_ESP32S3_SDMMC_CMD=38
+ CONFIG_ESP32S3_SPI2=y
+ CONFIG_ESP32S3_SPI2_CLKPIN=21
+ CONFIG_ESP32S3_SPI2_CSPIN=44
+-CONFIG_ESP32S3_SPI2_MISOPIN=1
++CONFIG_ESP32S3_SPI2_MISOPIN=-1
+ CONFIG_ESP32S3_SPI2_MOSIPIN=47
+ CONFIG_ESP32S3_SPIRAM=y
+ CONFIG_ESP32S3_SPIRAM_MODE_OCT=y
+ CONFIG_ESP32S3_USBSERIAL=y
++CONFIG_ESP32S3_USBSERIAL_TXBUFSIZE=16384
++CONFIG_ESP32S3_USBSERIAL_TXSTALL_TIMEOUT=1000
+ CONFIG_ESP32S3_WIFI=y
++CONFIG_ESP32S3_WIFI_STATIC_TXBUF=y
++CONFIG_ESP32S3_WIFI_STATIC_TXBUF_NUM=8
++CONFIG_EXAMPLES_AI_AGENT_VELA=y
++CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR="/mnt/sd/.ai_agent"
+ CONFIG_EXAMPLES_BUTTONS=y
+-CONFIG_EXAMPLES_CAMERA=y
++CONFIG_EXAMPLES_CAMERA_GALLERY=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_ARENA_SIZE=1048576
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_STACKSIZE=16384
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_PRIORITY=90
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_INTERVAL_MS=800
++CONFIG_EXAMPLES_CAMERA_GALLERY_CLOUD_SCORE=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_THRESHOLD=85
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_COOLDOWN_MS=5000
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_DHASH_DISTANCE=6
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_MAX_ASSETS=32
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_STACKSIZE=24576
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_PRIORITY=70
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_RETRY_SEC=5
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_CLOUD_RETRY_MAX_SEC=300
++CONFIG_EXAMPLES_CAMERA_GALLERY_AUTOSTART=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_ADC_BUTTONS=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_ADC_DEVPATH="/dev/adc0"
++CONFIG_EXAMPLES_CAMERA_GALLERY_BUTTONS_DEVPATH="/dev/buttons"
++CONFIG_EXAMPLES_CAMERA_GALLERY_DEVPATH="/dev/video0"
++CONFIG_EXAMPLES_CAMERA_GALLERY_PRIORITY=100
++CONFIG_EXAMPLES_CAMERA_GALLERY_SD_DEVPATH="/dev/mmcsd1"
++CONFIG_EXAMPLES_CAMERA_GALLERY_SD_MOUNTPOINT="/mnt/sd"
++CONFIG_EXAMPLES_CAMERA_GALLERY_STACKSIZE=12288
+ CONFIG_EXAMPLES_HELLO=y
+ CONFIG_EXAMPLES_LEDS=y
+-CONFIG_EXAMPLES_LVGLDEMO=y
+ CONFIG_EXAMPLES_RANDOM=y
+ CONFIG_FAT_LCNAMES=y
+ CONFIG_FAT_LFN=y
+ CONFIG_FS_FAT=y
+ CONFIG_FS_PROCFS=y
+-CONFIG_GRAPHICS_LVGL=y
++CONFIG_FS_TMPFS=y
+ CONFIG_HAVE_CXXINITIALIZE=y
+ CONFIG_IDLETHREAD_STACKSIZE=3072
+ CONFIG_INIT_ENTRYPOINT="nsh_main"
+@@ -96,20 +137,14 @@ CONFIG_LCD_ST7789_YOFFSET=80
+ CONFIG_LCD_ST7789_YRES=240
+ CONFIG_LIBYUV=y
+ CONFIG_LINE_MAX=64
+-CONFIG_LV_FONT_MONTSERRAT_20=y
+-CONFIG_LV_NUTTX_LCD_DOUBLE_BUFFER=y
+-CONFIG_LV_USE_CLIB_MALLOC=y
+-CONFIG_LV_USE_CLIB_SPRINTF=y
+-CONFIG_LV_USE_CLIB_STRING=y
+-CONFIG_LV_USE_DEMO_WIDGETS=y
+-CONFIG_LV_USE_LOG=y
+-CONFIG_LV_USE_NUTTX=y
+-CONFIG_LV_USE_NUTTX_LCD=y
+-CONFIG_LV_USE_NUTTX_TOUCHSCREEN=y
+ CONFIG_MMCSD_CHECK_READY_STATUS_WITHOUT_SLEEP=y
+ CONFIG_MMCSD_MULTIBLOCK_LIMIT=128
+ CONFIG_MM_REGIONS=2
++CONFIG_MQ_MAXMSGSIZE=64
+ CONFIG_NAME_MAX=48
++CONFIG_NX=y
++CONFIG_NX_BLOCKING=y
++CONFIG_NXFONT_MONO5X8=y
+ CONFIG_NETDB_BUFSIZE=512
+ CONFIG_NETDB_DNSCLIENT=y
+ CONFIG_NETDB_DNSCLIENT_RECV_TIMEOUT=2
+@@ -163,6 +198,7 @@ CONFIG_NSH_ARCHINIT=y
+ CONFIG_NSH_BUILTIN_APPS=y
+ CONFIG_NSH_FILEIOSIZE=512
+ CONFIG_NSH_READLINE=y
++CONFIG_PIPES=y
+ CONFIG_POSIX_SPAWN_DEFAULT_STACKSIZE=2048
+ CONFIG_PREALLOC_TIMERS=4
+ CONFIG_PTHREAD_MUTEX_TYPES=y
+@@ -175,8 +211,6 @@ CONFIG_SDIO_WIDTH_D1_ONLY=y
+ CONFIG_SENSORS=y
+ CONFIG_SENSORS_QMA7981=y
+ CONFIG_SIG_DEFAULT=y
+-CONFIG_SMP=y
+-CONFIG_SMP_NCPUS=2
+ CONFIG_SPI_CMDDATA=y
+ CONFIG_START_DAY=6
+ CONFIG_START_MONTH=12
+@@ -187,6 +221,7 @@ CONFIG_SYSTEM_DHCPC_RENEW=y
+ CONFIG_SYSTEM_I2CTOOL=y
+ CONFIG_SYSTEM_NSH=y
+ CONFIG_SYSTEM_PING=y
++CONFIG_SYSTEM_SYSTEM=y
+ CONFIG_SYSTEM_PING_STACKSIZE=3072
+ CONFIG_SYSTEM_TCPDUMP=y
+ CONFIG_TESTING_GETPRIME=y
+@@ -208,3 +243,23 @@ CONFIG_WIRELESS_WAPI=y
+ CONFIG_WIRELESS_WAPI_CMDTOOL=y
+ CONFIG_WIRELESS_WAPI_INITCONF=y
+ CONFIG_WIRELESS_WAPI_STACKSIZE=8192
++CONFIG_SYSTEM_FLATBUFFERS=y
++CONFIG_MATH_GEMMLOWP=y
++CONFIG_MATH_KISSFFT=y
++CONFIG_MATH_RUY=y
++CONFIG_TFLITEMICRO=y
++CONFIG_MLEARNING_ESP_NN=y
++CONFIG_XTENSA_CP_INITSET=0x0009
++CONFIG_ESP32S3_FLASH_FREQ_80M=y
++CONFIG_ESP32S3_SPIRAM_SPEED_80M=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG=y
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_ARENA_SIZE=1048576
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_STACKSIZE=16384
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_PRIORITY=90
++CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_INTERVAL_MS=800
++# CONFIG_LIBCXXTOOLCHAIN is not set
++# CONFIG_LIBSUPCXX_TOOLCHAIN is not set
++CONFIG_TLS_NELEM=4
++CONFIG_LIBCXX=y
++CONFIG_LIBCXXABI=y
++CONFIG_NSH_LINELEN=256
+\ No newline at end of file
+diff --git a/boards/esp32s3/esp32s3-eye/src/esp32s3-eye.h b/boards/esp32s3/esp32s3-eye/src/esp32s3-eye.h
+index bf6d719..2222873 100644
+--- a/boards/esp32s3/esp32s3-eye/src/esp32s3-eye.h
++++ b/boards/esp32s3/esp32s3-eye/src/esp32s3-eye.h
+@@ -104,6 +104,10 @@ int esp32s3_gpio_init(void);
+ int board_spiflash_init(void);
+ #endif
+ 
++#ifdef CONFIG_ESP32S3_CAM
++int board_camera_initialize(void);
++#endif
++
+ /****************************************************************************
+  * Name: board_lcd_initialize
+  *
+diff --git a/boards/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c b/boards/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c
+index 89242af..a39dbf9 100644
+--- a/boards/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c
++++ b/boards/esp32s3/esp32s3-eye/src/esp32s3_board_lcd.c
+@@ -46,10 +46,6 @@
+ 
+ #include "esp32s3-eye.h"
+ 
+-/****************************************************************************
+- * Pre-processor Definitions
+- ****************************************************************************/
+-
+ /****************************************************************************
+  * Private Data
+  ****************************************************************************/
+@@ -57,6 +53,12 @@
+ static struct spi_dev_s *g_spidev;
+ static struct lcd_dev_s *g_lcd;
+ 
++/****************************************************************************
++ * Private Functions
++ ****************************************************************************/
++
++extern int ets_printf(const char *fmt, ...);
++
+ /****************************************************************************
+  * Public Functions
+  ****************************************************************************/
+@@ -76,6 +78,22 @@ static struct lcd_dev_s *g_lcd;
+ 
+ int board_lcd_initialize(void)
+ {
++  uint32_t frequency;
++  int ret;
++
++  ets_printf("[lcddiag] L0 board_lcd_initialize enter lcd=%p spi=%p\n",
++             g_lcd, g_spidev);
++
++  /* Both board bringup and the NX server may request the LCD.  Keep the
++   * shared controller instance intact instead of resetting it twice.
++   */
++
++  if (g_lcd != NULL)
++    {
++      ets_printf("[lcddiag] L1 reuse initialized LCD\n");
++      return OK;
++    }
++
+   /* Initialize non-SPI GPIOs */
+ 
+   esp32s3_configgpio(ESP32S3_EYE_DISPLAY_DC, OUTPUT);
+@@ -84,23 +102,35 @@ int board_lcd_initialize(void)
+   /* Turn on LCD backlight */
+ 
+   esp32s3_gpiowrite(ESP32S3_EYE_DISPLAY_BCKL, false);
++  ets_printf("[lcddiag] L2 GPIO dc=%d backlight=%d\n",
++             esp32s3_gpioread(ESP32S3_EYE_DISPLAY_DC),
++             esp32s3_gpioread(ESP32S3_EYE_DISPLAY_BCKL));
+ 
+   g_spidev = esp32s3_spibus_initialize(ESP32S3_EYE_DISPLAY_SPI);
+   if (!g_spidev)
+     {
++      ets_printf("[lcddiag] ERROR SPI%d initialization failed\n",
++                 ESP32S3_EYE_DISPLAY_SPI);
+       lcderr("ERROR: Failed to initialize SPI port %d\n",
+              ESP32S3_EYE_DISPLAY_SPI);
+       return -ENODEV;
+     }
+ 
++  frequency = SPI_SETFREQUENCY(g_spidev, CONFIG_LCD_ST7789_FREQUENCY);
++  ets_printf("[lcddiag] L3 SPI=%p requested=%u actual=%u\n",
++             g_spidev, CONFIG_LCD_ST7789_FREQUENCY, frequency);
++
+   g_lcd = st7789_lcdinitialize(g_spidev);
+   if (!g_lcd)
+     {
++      ets_printf("[lcddiag] ERROR st7789_lcdinitialize failed\n");
+       lcderr("ERROR: st7789_lcdinitialize() failed\n");
+       return -ENODEV;
+     }
+ 
+-  return OK;
++  ret = g_lcd->setpower(g_lcd, CONFIG_LCD_MAXPOWER);
++  ets_printf("[lcddiag] L4 ST7789=%p setpower=%d\n", g_lcd, ret);
++  return ret;
+ }
+ 
+ /****************************************************************************
+@@ -149,7 +179,19 @@ struct lcd_dev_s *board_lcd_getdev(int devno)
+ 
+ void board_lcd_uninitialize(void)
+ {
+-  /* Turn the display off */
++  /* Turn the display off and release the bus so a later initialization can
++   * perform the complete reset sequence again.
++   */
+ 
+-  g_lcd->setpower(g_lcd, 0);
++  if (g_lcd != NULL)
++    {
++      g_lcd->setpower(g_lcd, 0);
++      g_lcd = NULL;
++    }
++
++  if (g_spidev != NULL)
++    {
++      esp32s3_spibus_uninitialize(g_spidev);
++      g_spidev = NULL;
++    }
+ }
+diff --git a/boards/esp32s3/esp32s3-eye/src/esp32s3_bringup.c b/boards/esp32s3/esp32s3-eye/src/esp32s3_bringup.c
+index 1fb0404..972b773 100644
+--- a/boards/esp32s3/esp32s3-eye/src/esp32s3_bringup.c
++++ b/boards/esp32s3/esp32s3-eye/src/esp32s3_bringup.c
+@@ -39,6 +39,15 @@
+ 
+ #include <errno.h>
+ #include <nuttx/fs/fs.h>
++#include <nuttx/sched.h>
++
++#ifdef CONFIG_EXAMPLES_CAMERA_GALLERY_AUTOSTART
++extern int camera_gallery_main(int argc, FAR char *argv[]);
++#endif
++
++#ifdef CONFIG_ESP32S3_ADC
++#  include "esp32s3_board_adc.h"
++#endif
+ 
+ #ifdef CONFIG_ESP32S3_TIMER
+ #  include "esp32s3_board_tim.h"
+@@ -101,6 +110,9 @@
+ 
+ #include "esp32s3-eye.h"
+ 
++extern int ets_printf(const char *fmt, ...);
++#define bringup_diag(s) ets_printf("[bootdiag] %s\n", s)
++
+ /****************************************************************************
+  * Public Functions
+  ****************************************************************************/
+@@ -122,9 +134,16 @@
+ int esp32s3_bringup(void)
+ {
+   int ret;
++
+ #ifdef CONFIG_SENSORS_QMA7981
+   FAR struct i2c_master_s *qma_i2c;
+ #endif
++#ifdef CONFIG_ESP32S3_I2S0
++  bool enable_tx = false;
++  bool enable_rx = false;
++#endif
++
++  bringup_diag("B0 board bringup entered");
+ 
+ #ifdef CONFIG_FS_PROCFS
+   /* Mount the procfs file system */
+@@ -185,16 +204,6 @@ int esp32s3_bringup(void)
+     }
+ #endif
+ 
+-#ifdef CONFIG_INPUT_BUTTONS
+-  /* Register the BUTTON driver */
+-
+-  ret = btn_lower_initialize("/dev/buttons");
+-  if (ret < 0)
+-    {
+-      syslog(LOG_ERR, "Failed to initialize button driver: %d\n", ret);
+-    }
+-#endif
+-
+ #ifdef CONFIG_USERLED_LOWER
+   /* Register the LED driver (Module Power LED on GPIO3, open-drain) */
+ 
+@@ -215,6 +224,8 @@ int esp32s3_bringup(void)
+ 
+ #ifdef CONFIG_ESP32S3_WIRELESS
+ 
++  bringup_diag("B1 wireless begin");
++
+ #ifdef CONFIG_ESP32S3_WIFI_BT_COEXIST
+   ret = esp32s3_wifi_bt_coexist_init();
+   if (ret)
+@@ -242,6 +253,8 @@ int esp32s3_bringup(void)
+ 
+ #endif
+ 
++  bringup_diag("B2 wireless complete");
++
+ #if defined(CONFIG_DEV_GPIO) && !defined(CONFIG_GPIO_LOWER_HALF)
+   ret = esp32s3_gpio_init();
+   if (ret < 0)
+@@ -250,8 +263,22 @@ int esp32s3_bringup(void)
+     }
+ #endif
+ 
++#ifdef CONFIG_ESP32S3_ADC
++  /* Register GPIO1 / ADC1 channel 0 before the gallery task starts.  The
++   * ADC pin itself is configured when /dev/adc0 is opened.
++   */
++
++  ret = board_adc_init();
++  if (ret < 0)
++    {
++      syslog(LOG_ERR, "ERROR: board_adc_init() failed: %d\n", ret);
++    }
++#endif
++
+ #ifdef CONFIG_ESP32S3_EYE_LCD
+ 
++  bringup_diag("B3 LCD begin");
++
+ #ifdef CONFIG_VIDEO_FB
+   ret = fb_register(0, 0);
+   if (ret < 0)
+@@ -274,9 +301,22 @@ int esp32s3_bringup(void)
+     }
+ #endif
+ 
++#endif
++
++  bringup_diag("B4 LCD complete");
++
++#ifdef CONFIG_INPUT_BUTTONS
++  /* Register GPIO0 BOOT.  The gallery merges it with /dev/adc0 keys. */
++
++  ret = btn_lower_initialize("/dev/buttons");
++  if (ret < 0)
++    {
++      syslog(LOG_ERR, "Failed to initialize button driver: %d\n", ret);
++    }
+ #endif
+ 
+ #ifdef CONFIG_ESP32S3_SDMMC
++  bringup_diag("B5 SDMMC begin");
+   ret = board_sdmmc_initialize();
+   if (ret < 0)
+     {
+@@ -284,7 +324,10 @@ int esp32s3_bringup(void)
+     }
+ #endif
+ 
++  bringup_diag("B6 SDMMC complete");
++
+ #ifdef CONFIG_ESP32S3_CAM
++  bringup_diag("B7 camera begin");
+   ret = board_camera_initialize();
+   if (ret < 0)
+     {
+@@ -292,7 +335,10 @@ int esp32s3_bringup(void)
+     }
+ #endif
+ 
++  bringup_diag("B8 camera complete");
++
+ #ifdef CONFIG_SENSORS_QMA7981
++  bringup_diag("B9 sensor begin");
+   qma_i2c = esp32s3_i2cbus_initialize(0);
+   if (qma_i2c == NULL)
+     {
+@@ -308,24 +354,37 @@ int esp32s3_bringup(void)
+     }
+ #endif
+ 
++  bringup_diag("B10 sensor complete");
++
+ #ifdef CONFIG_ESP32S3_I2S0
+-  ret = board_i2sdev_initialize(ESP32S3_I2S0,
++  bringup_diag("B11 I2S begin");
+ #ifdef CONFIG_ESP32S3_I2S0_TX
+-                                true,
+-#else
+-                                false,
++  enable_tx = true;
+ #endif
+ #ifdef CONFIG_ESP32S3_I2S0_RX
+-                                true);
+-#else
+-                                false);
++  enable_rx = true;
+ #endif
++
++  ret = board_i2sdev_initialize(ESP32S3_I2S0, enable_tx, enable_rx);
+   if (ret < 0)
+     {
+       syslog(LOG_ERR, "Failed to initialize I2S0 driver: %d\n", ret);
+     }
+ #endif
+ 
++#ifdef CONFIG_EXAMPLES_CAMERA_GALLERY_AUTOSTART
++  ret = task_create("camera_gallery",
++                    CONFIG_EXAMPLES_CAMERA_GALLERY_PRIORITY,
++                    CONFIG_EXAMPLES_CAMERA_GALLERY_STACKSIZE,
++                    camera_gallery_main, NULL);
++  if (ret < 0)
++    {
++      syslog(LOG_ERR, "ERROR: Failed to start camera gallery: %d\n", ret);
++    }
++#endif
++
++  bringup_diag("B12 board bringup complete");
++
+   /* If we got here then perhaps not all initialization was successful, but
+    * at least enough succeeded to bring-up NSH with perhaps reduced
+    * capabilities.
+diff --git a/boards/esp32s3/esp32s3-eye/src/esp32s3_buttons.c b/boards/esp32s3/esp32s3-eye/src/esp32s3_buttons.c
+index db9b1d4..1ba007b 100644
+--- a/boards/esp32s3/esp32s3-eye/src/esp32s3_buttons.c
++++ b/boards/esp32s3/esp32s3-eye/src/esp32s3_buttons.c
+@@ -27,8 +27,9 @@
+ #include <nuttx/config.h>
+ 
+ #include <assert.h>
+-#include <debug.h>
++#include <errno.h>
+ #include <stdbool.h>
++#include <stdint.h>
+ 
+ #include <nuttx/arch.h>
+ #include <nuttx/board.h>
+@@ -39,6 +40,49 @@
+ 
+ #include "esp32s3-eye.h"
+ 
++/****************************************************************************
++ * Pre-processor Definitions
++ ****************************************************************************/
++
++#define EYE_BUTTON_BOOT_ID  0
++#define EYE_BUTTON_COUNT    1
++#define EYE_BUTTON_BOOT_BIT (1u << EYE_BUTTON_BOOT_ID)
++
++/****************************************************************************
++ * Private Functions
++ ****************************************************************************/
++
++static bool button_boot_sample(bool debounce)
++{
++  bool state = esp32s3_gpioread(BUTTON_BOOT);
++  int stable = 0;
++  int i;
++
++  if (!debounce)
++    {
++      return state;
++    }
++
++  for (i = 0; i < 10 && stable < 3; i++)
++    {
++      bool next;
++
++      up_mdelay(1);
++      next = esp32s3_gpioread(BUTTON_BOOT);
++      if (next == state)
++        {
++          stable++;
++        }
++      else
++        {
++          state = next;
++          stable = 0;
++        }
++    }
++
++  return state;
++}
++
+ /****************************************************************************
+  * Public Functions
+  ****************************************************************************/
+@@ -47,120 +91,68 @@
+  * Name: board_button_initialize
+  *
+  * Description:
+- *   board_button_initialize() must be called to initialize button resources.
+- *   After that, board_buttons() may be called to collect the current state
+- *   of all buttons or board_button_irq() may be called to register button
+- *   interrupt handlers.
++ *   Initialize the active-low BOOT button on GPIO0.  The GPIO1 resistor
++ *   ladder is sampled through /dev/adc0 in task context because the ADC
++ *   driver cannot be called safely from this GPIO IRQ lower half.
+  *
+  ****************************************************************************/
+ 
+ uint32_t board_button_initialize(void)
+ {
+   esp32s3_configgpio(BUTTON_BOOT, INPUT_FUNCTION_2 | PULLUP);
+-  return 1;
++  return EYE_BUTTON_COUNT;
+ }
+ 
+ /****************************************************************************
+  * Name: board_buttons
+  *
+  * Description:
+- *   After board_button_initialize() has been called, board_buttons() may be
+- *   called to collect the state of all buttons.  board_buttons() returns an
+- *   8-bit bit set with each bit associated with a button.  See the
+- *   BUTTON_*_BIT  definitions in board.h for the meaning of each bit.
++ *   Return the BOOT button as bit 0.
+  *
+  ****************************************************************************/
+ 
+ uint32_t board_buttons(void)
+ {
+-  uint8_t ret = 0;
+-  int i = 0;
+-  int n = 0;
+-
+-  bool b0 = esp32s3_gpioread(BUTTON_BOOT);
+-
+-  for (i = 0; i < 10; i++)
+-    {
+-      up_mdelay(1);
++  bool debounce = !up_interrupt_context();
+ 
+-      bool b1 = esp32s3_gpioread(BUTTON_BOOT);
+-
+-      if (b0 == b1)
+-        {
+-          n++;
+-        }
+-      else
+-        {
+-          n = 0;
+-        }
+-
+-      if (3 == n)
+-        {
+-          break;
+-        }
+-
+-      b0 = b1;
+-    }
+-
+-  iinfo("b=%d n=%d\n", b0, n);
+-
+-  /* Low value means that the button is pressed */
+-
+-  if (!b0)
+-    {
+-      ret = 0x1;
+-    }
+-
+-  return ret;
++  return button_boot_sample(debounce) ? 0 : EYE_BUTTON_BOOT_BIT;
+ }
+ 
+ /****************************************************************************
+  * Name: board_button_irq
+  *
+  * Description:
+- *   board_button_irq() may be called to register an interrupt handler that
+- *   will be called when a button is depressed or released.  The ID value is
+- *   a button enumeration value that uniquely identifies a button resource.
+- *   See the BUTTON_* definitions in board.h for the meaning of enumeration
+- *   value.
++ *   Register a change interrupt for the BOOT button.
+  *
+  ****************************************************************************/
+ 
+ #ifdef CONFIG_ARCH_IRQBUTTONS
+ int board_button_irq(int id, xcpt_t irqhandler, void *arg)
+ {
++  int irq;
+   int ret;
+-  DEBUGASSERT(id == 0);
+-
+-  int irq = ESP32S3_PIN2IRQ(BUTTON_BOOT);
+ 
+-  if (irqhandler != NULL)
++  DEBUGASSERT(id == EYE_BUTTON_BOOT_ID);
++  if (id != EYE_BUTTON_BOOT_ID)
+     {
+-      /* Make sure the interrupt is disabled */
+-
+-      esp32s3_gpioirqdisable(irq);
+-
+-      ret = irq_attach(irq, irqhandler, arg);
+-      if (ret < 0)
+-        {
+-          syslog(LOG_ERR, "ERROR: irq_attach() failed: %d\n", ret);
+-          return ret;
+-        }
+-
+-      gpioinfo("Attach %p\n", irqhandler);
+-
+-      gpioinfo("Enabling the interrupt\n");
++      return -EINVAL;
++    }
+ 
+-      /* Configure the interrupt for rising and falling edges */
++  irq = ESP32S3_PIN2IRQ(BUTTON_BOOT);
++  esp32s3_gpioirqdisable(irq);
+ 
+-      esp32s3_gpioirqenable(irq, CHANGE);
++  if (irqhandler == NULL)
++    {
++      return OK;
+     }
+-  else
++
++  ret = irq_attach(irq, irqhandler, arg);
++  if (ret < 0)
+     {
+-      gpioinfo("Disable the interrupt\n");
+-      esp32s3_gpioirqdisable(irq);
++      return ret;
+     }
+ 
++  esp32s3_gpioirqenable(irq, CHANGE);
+   return OK;
+ }
+ #endif

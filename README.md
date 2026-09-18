@@ -37,7 +37,8 @@ cloud/aivlog_server/      # 云端服务（FastAPI + uvicorn，HTTPS 443 + Beare
   ├── run.py / requirements.txt    # 启动入口与依赖（另需系统 ffmpeg）
   └── server.env.example           # 配置模板（token/密钥/证书路径，复制为 server.env 并填值）
 configs/aivlog/defconfig  # 实际使用的完整构建配置（拷为 nuttx/.config）
-patches/                  # nuttx / apps 公共仓的全部改动 diff（fallback，见 4.2）
+patches/                  # 各仓改动 diff：nuttx/apps（PR fallback）、ai_agent、
+                          # vendor/espressif、esp-hal spinlock（见 4.2）
 logs/                     # AI Coding 日志（按成员 GitHub 账号分目录）
 README.md                 # 本文件
 ```
@@ -55,17 +56,30 @@ repo sync -c -j8
 manifest 会把 `app/camera_gallery` 软链到 `packages/demos/contest2026_312_camera_gallery`、
 `third_party/esp-nn` 软链到 `apps/mlearning/esp-nn`，构建系统自动发现（Kconfig/Make.defs 自注册）。
 
-### 4.2 应用 nuttx / apps 补丁（重要）
+### 4.2 应用补丁（重要）
 
-本作品对公共仓有**驱动级修复**，已按比赛规则向公共仓 `dev-ai-contest-2026` 分支提交 PR：
+manifest 已将 nuttx / apps / ai_agent / vendor_espressif 四仓**钉定到本作品验证过的修订**
+（见 `contest2026_312_zheyangpaiduibudui.xml` 中的 `revision=`），下述补丁在这些基线上必定干净应用。
 
-- nuttx PR：【待填链接】（SDMMC IDMAC 弹射缓冲、CDETECT 防抖、USB-CDC 控制台防死锁、WiFi 静态 TX 缓冲、esp-hal spinlock 补丁等，共 19 文件）
+**第一步（必须）**：应用 ai_agent 与 vendor/espressif 补丁——端云链路（vela_tls 证书锁定
+传输、config_store 持久化、network_manager 弱网管理）与板级支持（LCD 初始化、按键驱动、
+应用自启动）依赖这些修改：
+
+```bash
+cd <工作区>
+git -C packages/ai_agent apply contest2026_312_zheyangpaiduibudui/patches/ai_agent-fixes.patch
+git -C vendor/espressif apply contest2026_312_zheyangpaiduibudui/patches/vendor-espressif-esp32s3-eye.patch
+```
+
+**第二步**：nuttx / apps 驱动级修复，已按比赛规则向公共仓 `dev-ai-contest-2026` 分支提交 PR：
+
+- nuttx PR：【待填链接】（SDMMC IDMAC 弹射缓冲、USB-CDC 控制台防死锁、WiFi 静态 TX 缓冲、
+  esp-hal spinlock 补丁、摄像头/LCD/ADC/加速度计驱动修复等，共 16 文件）
 - apps PR：【待填链接】（mbedtls `-isystem` 构建修复、wapi 密钥材料清理，2 文件）
 
 **若 PR 已合入**：跳过本步。**若未合入**，应用 fallback 补丁：
 
 ```bash
-cd <工作区>
 git -C nuttx apply contest2026_312_zheyangpaiduibudui/patches/nuttx-esp32s3-fixes.patch
 cp contest2026_312_zheyangpaiduibudui/patches/esp-hal-3rdparty-spinlock.patch \
    nuttx/arch/xtensa/src/esp32s3/          # 构建时自动 apply 到 esp-hal-3rdparty
