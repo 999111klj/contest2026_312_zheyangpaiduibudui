@@ -151,6 +151,9 @@ int camera_gallery_aivlog_session_candidate(
 void camera_gallery_aivlog_session_finish(void);
 void camera_gallery_aivlog_cloud_wake(void);
 int camera_gallery_aivlog_cloud_command(int argc, FAR char *argv[]);
+#ifdef CONFIG_EXAMPLES_AI_AGENT_VELA_DATA_DIR
+int camera_gallery_aivlog_install_skill(void);
+#endif
 #endif
 
 #ifdef CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_PROVISION

@@ -3120,3 +3120,20 @@ index 549a15b..f3e298c 100644
      free(body);
  
      if (err != OK) {
+diff --git a/src/tools/tool_shell.c b/src/tools/tool_shell.c
+index 1acc875..c3ca4c8 100644
+--- a/src/tools/tool_shell.c
++++ b/src/tools/tool_shell.c
+@@ -90,7 +90,11 @@ static const char *s_allowed[] = {
+     "set_gateway", "set_mqtt",
+     "session_list", "memory_read",
+     "mcp_list", "mcp_discover",
+-    
++
++    /* Device application commands (status reports only, no arguments
++     * that mutate state; shell meta-characters are rejected anyway) */
++    "camera_gallery",
++
+     NULL
+ };
+ #endif
