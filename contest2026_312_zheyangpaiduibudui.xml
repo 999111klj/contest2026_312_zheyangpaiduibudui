@@ -8,6 +8,18 @@
   -->
   <include name="openvela.xml"/>
 
+  <!-- Pin the repos we patch to the exact revisions the submission was
+       built and verified against, so patches/ always applies cleanly
+       regardless of contest-branch movement. -->
+  <project path="nuttx" name="nuttx"
+           revision="dd92bcf425738734d1b8aed09c2bd4dbe3f2e438"/>
+  <project path="apps" name="apps"
+           revision="dcc6a95c3b323e533c98fde8fb209f99e24f0fdd"/>
+  <project path="packages/ai_agent" name="packages_ai_agent"
+           revision="31faed70f683a6f5e690437c5507891360f0814a"/>
+  <project path="vendor/espressif" name="vendor_espressif"
+           revision="afe1b8c5ec67ff76eda48ee84d9dd116df2814ba"/>
+
   <project path="contest2026_312_zheyangpaiduibudui" name="contest2026_312_zheyangpaiduibudui">
     <linkfile src="app/camera_gallery" dest="packages/demos/contest2026_312_camera_gallery"/>
     <linkfile src="third_party/esp-nn" dest="apps/mlearning/esp-nn"/>

@@ -1,0 +1,3122 @@
+diff --git a/include/agent_config.h b/include/agent_config.h
+index 711bb6d..7806ad4 100644
+--- a/include/agent_config.h
++++ b/include/agent_config.h
+@@ -156,7 +156,7 @@
+ /* ── MiMo (Xiaomi MiMo platform) ───────────────────────────── */
+ #define AGENT_LLM_MIMO_HOST "api.xiaomimimo.com"
+ #define AGENT_LLM_MIMO_PATH "/v1/chat/completions"
+-#define AGENT_LLM_MIMO_MODEL "mimo-v2-flash"
++#define AGENT_LLM_MIMO_MODEL "mimo-v2.5"
+ 
+ /* ── Message Bus ────────────────────────────────────────────── */
+ #define AGENT_BUS_QUEUE_LEN 16
+@@ -260,7 +260,7 @@
+ #define AGENT_VISION_MAX_IMAGE_SIZE \
+     (256 * 1024) /* max JPEG file size: 256 KB */
+ #define AGENT_VISION_MAX_B64_SIZE (350 * 1024) /* base64 ≈ 4/3 × raw */
+-#define AGENT_VISION_MAX_TOKENS 4096
++#define AGENT_VISION_MAX_TOKENS 256
+ #define AGENT_VISION_DEFAULT_PROMPT                                      \
+     "Please analyze this image in detail. If it contains text, tables, or " \
+     "documents, extract and describe the content accurately."
+diff --git a/src/agent_main.c b/src/agent_main.c
+index 9d676c2..369cb26 100644
+--- a/src/agent_main.c
++++ b/src/agent_main.c
+@@ -77,11 +77,10 @@
+ #ifdef CONFIG_AI_AGENT_LVGL_UI
+ #include "ui/lvgl_ui_channel.h"
+ #endif
+-#ifdef CONFIG_AI_AGENT_BLE_GATT
++#if defined(CONFIG_AI_AGENT_BLE_GATT) && \
++    !defined(CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_PROVISION)
+ #include "infra/ble_cmd_handler.h"
+ #include "infra/ble_gatt.h"
+-#include <bluetooth.h>
+-#include <bt_adapter.h>
+ #endif
+ 
+ static const char* TAG = "agent";
+@@ -643,22 +642,12 @@ int ai_agent_main(int argc, char* argv[])
+     BOOT_LOG(&t0, "P5", "lvgl_ui_channel started");
+ #endif
+ 
+-#ifdef CONFIG_AI_AGENT_BLE_GATT
+-    /* BLE GATT: ensure adapter enabled, then init with retries */
++#if defined(CONFIG_AI_AGENT_BLE_GATT) && \
++    !defined(CONFIG_EXAMPLES_CAMERA_GALLERY_AIVLOG_PROVISION)
++    /* BLE GATT: initialize the NuttX-native NUS channel with retries. */
+     {
+         extern void ble_cmd_handler_recv(const uint8_t* data, uint16_t len,
+             void* user_data);
+-        bt_instance_t* bt_ins = bluetooth_get_instance();
+-        if (bt_ins) {
+-            bt_adapter_state_t state = bt_adapter_get_state(bt_ins);
+-            if (state < BT_ADAPTER_STATE_BLE_ON) {
+-                syslog(LOG_INFO, "[%s] BT not ready (state=%d), enabling LE...\n",
+-                    TAG, (int)state);
+-                bt_adapter_enable_le(bt_ins);
+-                sleep(2);
+-            }
+-        }
+-
+         ble_gatt_config_t ble_cfg = {
+             .device_name = "VelaClaw",
+             .recv_cb = ble_cmd_handler_recv,
+diff --git a/src/channels/cmd_llm.c b/src/channels/cmd_llm.c
+index 0bda07f..6f8bd88 100644
+--- a/src/channels/cmd_llm.c
++++ b/src/channels/cmd_llm.c
+@@ -47,7 +47,7 @@ static const router_preset_t g_router_presets[] = {
+     { "glm", "open.bigmodel.cn", "/api/paas/v4/chat/completions", "glm-4-flash", 1 },
+     { "openai", "api.openai.com", "/v1/chat/completions", "gpt-4o", 3 },
+     { "claude", "api.anthropic.com", "/v1/messages", "claude-sonnet-4-20250514", 3 },
+-    { "mimo", "api.xiaomimimo.com", "/v1/chat/completions", "mimo-v2-flash", 1 },
++    { "mimo", "api.xiaomimimo.com", "/v1/chat/completions", "mimo-v2.5", 1 },
+     { "openrouter", "openrouter.ai", "/api/v1/chat/completions",
+         "openrouter/hunter-alpha", 2 },
+     { NULL, NULL, NULL, NULL, 0 }
+@@ -69,7 +69,7 @@ void cmd_set_llm(int argc, char** argv)
+                "  glm      - open.bigmodel.cn  (glm-4-flash)\n"
+                "  openai   - api.openai.com  (gpt-4o)\n"
+                "  openrouter - openrouter.ai  (openrouter/hunter-alpha)\n"
+-               "  mimo     - api.xiaomimimo.com  (MiMo-v2-Flash)\n"
++               "  mimo     - api.xiaomimimo.com  (mimo-v2.5)\n"
+                "\n"
+                "URL format (for custom endpoints):\n"
+                "  set_llm http://host:port/path model key\n"
+@@ -239,7 +239,7 @@ void cmd_set_vision_llm(int argc, char** argv)
+                "vision calls inherit the main LLM config.\n"
+                "\n"
+                "Presets:\n"
+-               "  mimo     - api.xiaomimimo.com  (mimo-v2-omni)\n"
++               "  mimo     - api.xiaomimimo.com  (mimo-v2.5)\n"
+                "  openai   - api.openai.com  (gpt-4o)\n"
+                "  qwen     - dashscope.aliyuncs.com  (qwen-vl-max)\n"
+                "  glm      - open.bigmodel.cn  (glm-4v-flash)\n"
+@@ -269,7 +269,7 @@ void cmd_set_vision_llm(int argc, char** argv)
+         const char* host;
+         const char* model;
+     } vision_presets[] = {
+-        { "mimo", "api.xiaomimimo.com", "mimo-v2-omni" },
++        { "mimo", "api.xiaomimimo.com", "mimo-v2.5" },
+         { "openai", "api.openai.com", "gpt-4o" },
+         { "qwen", "dashscope.aliyuncs.com", "qwen-vl-max" },
+         { "glm", "open.bigmodel.cn", "glm-4v-flash" },
+diff --git a/src/infra/ble_gatt.c b/src/infra/ble_gatt.c
+index 807c924..38bed79 100644
+--- a/src/infra/ble_gatt.c
++++ b/src/infra/ble_gatt.c
+@@ -3,603 +3,491 @@
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+  */
+ 
+-/**
+- * BLE GATT Data Channel - Nordic UART Service (NUS) pattern
+- *
+- * Custom GATT service with RX (write) and TX (notify) characteristics
+- * for bidirectional data exchange over BLE.
+- */
++/** Lightweight NuttX-native Nordic UART Service data channel. */
+ 
+ #include "ble_gatt.h"
+ 
++#include <nuttx/config.h>
++#include <nuttx/wireless/bluetooth/bt_core.h>
++#include <nuttx/wireless/bluetooth/bt_gatt.h>
++#include <nuttx/wireless/bluetooth/bt_hci.h>
++#include <nuttx/wireless/bluetooth/bt_ioctl.h>
++
++#include <net/if.h>
++#include <netpacket/bluetooth.h>
++#include <sys/ioctl.h>
++
+ #include <errno.h>
+ #include <pthread.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
+ #include <string.h>
+-#include <syslog.h>
+ #include <unistd.h>
+ 
+-#include <advertiser_data.h>
+-#include <bluetooth.h>
+-#include <bt_addr.h>
+-#include <bt_gatt_defs.h>
+-#include <bt_gatts.h>
+-#include <bt_le_advertiser.h>
+-#include <bt_uuid.h>
+-
+-#define TAG "ble_gatt"
+-
+-/* NUS UUIDs as BT_UUID_DECLARE_128 inline bytes (little-endian) */
+-#define NUS_SVC_UUID_BYTES                          \
+-    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, \
+-        0x93, 0xf3, 0xa3, 0xb5, 0x01, 0x00, 0x40, 0x6e
+-#define NUS_RX_UUID_BYTES                           \
+-    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, \
+-        0x93, 0xf3, 0xa3, 0xb5, 0x02, 0x00, 0x40, 0x6e
+-#define NUS_TX_UUID_BYTES                           \
+-    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, \
+-        0x93, 0xf3, 0xa3, 0xb5, 0x03, 0x00, 0x40, 0x6e
+-
+-/* Attribute handle IDs (matching GATT_H_* macro convention) */
+-enum {
+-    NUS_SVC_ID = 1,
+-    NUS_TX_CHR_ID,
+-    NUS_TX_CCC_ID,
+-    NUS_RX_CHR_ID,
+-};
++#define BLE_GATT_INTERFACE             "bnep0"
++#define BLE_GATT_DEVICE_NAME_MAX       29
++#define BLE_GATT_DEFAULT_MTU           23
++#define BLE_GATT_RESPONSE_MAX          768
++#define BLE_GATT_ADVERTISE_RETRY_SEC   3
+ 
+-/* Default MTU */
+-#define DEFAULT_MTU 23
++#define NUS_SERVICE_HANDLE             0x0100
++#define NUS_RX_CHRC_HANDLE             0x0101
++#define NUS_RX_VALUE_HANDLE            0x0102
++#define NUS_TX_CHRC_HANDLE             0x0103
++#define NUS_TX_VALUE_HANDLE            0x0104
++#define NUS_TX_CCC_HANDLE              0x0105
+ 
+-/* -- State --------------------------------------------------- */
++/* Nordic UART UUIDs in Bluetooth little-endian byte order. */
+ 
+-static struct {
+-    bt_instance_t* bt_ins;
+-    gatts_handle_t srv_handle;
+-
+-    bt_address_t peer_addr;
+-    bool connected;
+-    uint16_t mtu;
+-    bool notify_enabled;
+-
+-    /* Advertising */
+-    bt_advertiser_t* adv_handle;
+-    bool advertising;
+-
+-    ble_gatt_config_t config;
+-
+-    bool initialized;
+-    pthread_mutex_t lock;
+-} g_gatt = {
+-    .connected = false,
+-    .mtu = DEFAULT_MTU,
+-    .notify_enabled = false,
+-    .adv_handle = NULL,
+-    .advertising = false,
+-    .initialized = false,
+-    .lock = PTHREAD_MUTEX_INITIALIZER,
++static struct bt_uuid_s g_nus_service_uuid =
++{
++  .type = BT_UUID_128,
++  .u.u128 =
++  {
++    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
++    0x93, 0xf3, 0xa3, 0xb5, 0x01, 0x00, 0x40, 0x6e
++  }
+ };
+ 
+-/* -- Forward declarations ------------------------------------ */
++static struct bt_uuid_s g_nus_rx_uuid =
++{
++  .type = BT_UUID_128,
++  .u.u128 =
++  {
++    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
++    0x93, 0xf3, 0xa3, 0xb5, 0x02, 0x00, 0x40, 0x6e
++  }
++};
+ 
+-static int adv_start(void);
++static struct bt_uuid_s g_nus_tx_uuid =
++{
++  .type = BT_UUID_128,
++  .u.u128 =
++  {
++    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
++    0x93, 0xf3, 0xa3, 0xb5, 0x03, 0x00, 0x40, 0x6e
++  }
++};
+ 
+-/* -- GATTS Callbacks ----------------------------------------- */
++static struct bt_gatt_chrc_s g_nus_rx_chrc =
++{
++  .properties = BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
++  .value_handle = NUS_RX_VALUE_HANDLE,
++  .uuid = &g_nus_rx_uuid
++};
+ 
+-static void on_connected(gatts_handle_t srv_handle, bt_address_t* addr)
++static struct bt_gatt_chrc_s g_nus_tx_chrc =
+ {
+-    char addr_str[18];
++  .properties = BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
++  .value_handle = NUS_TX_VALUE_HANDLE,
++  .uuid = &g_nus_tx_uuid
++};
+ 
+-    if (!addr) {
+-        return;
+-    }
+-    bt_addr_ba2str(addr, addr_str);
+-    syslog(LOG_INFO, "[%s] GATT connected: %s\n", TAG, addr_str);
+-
+-    pthread_mutex_lock(&g_gatt.lock);
+-    memcpy(&g_gatt.peer_addr, addr, sizeof(bt_address_t));
+-    g_gatt.connected = true;
+-    g_gatt.notify_enabled = false;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    /* Advertising stops automatically on connection */
+-
+-    /* Snapshot callback before releasing - avoids TOCTOU if config
+-     * is modified between the check and the call. */
+-    ble_gatt_conn_cb_t conn_cb;
+-    void* user_data;
+-    conn_cb = g_gatt.config.conn_cb;
+-    user_data = g_gatt.config.user_data;
+-
+-    if (conn_cb) {
+-        conn_cb(true, user_data);
+-    }
+-}
++static struct bt_gatt_ccc_cfg_s
++  g_nus_tx_ccc[CONFIG_BLUETOOTH_MAX_PAIRED];
+ 
+-static void on_disconnected(gatts_handle_t srv_handle, bt_address_t* addr)
++static struct
++{
++  pthread_mutex_t lock;
++  pthread_cond_t advertise_cond;
++  pthread_t advertise_thread;
++  ble_gatt_config_t config;
++  char device_name[BLE_GATT_DEVICE_NAME_MAX + 1];
++  uint8_t response[BLE_GATT_RESPONSE_MAX];
++  uint16_t response_length;
++  bool initialized;
++  bool stopping;
++  bool advertise_thread_started;
++  bool connected_reported;
++  bool advertise_requested;
++} g_ble_gatt =
+ {
+-    char addr_str[18];
+-    ble_gatt_conn_cb_t conn_cb;
+-    void* user_data;
++  .lock = PTHREAD_MUTEX_INITIALIZER,
++  .advertise_cond = PTHREAD_COND_INITIALIZER
++};
+ 
+-    if (addr) {
+-        bt_addr_ba2str(addr, addr_str);
+-        syslog(LOG_INFO, "[%s] GATT disconnected: %s\n", TAG, addr_str);
+-    }
++static int ble_gatt_advertise(bool start);
+ 
+-    pthread_mutex_lock(&g_gatt.lock);
+-    g_gatt.connected = false;
+-    g_gatt.notify_enabled = false;
+-    g_gatt.mtu = DEFAULT_MTU;
+-    conn_cb = g_gatt.config.conn_cb;
+-    user_data = g_gatt.config.user_data;
+-    pthread_mutex_unlock(&g_gatt.lock);
++static void ble_gatt_report_connection(bool connected)
++{
++  ble_gatt_conn_cb_t callback = NULL;
++  FAR void *user_data = NULL;
++  bool changed = false;
+ 
+-    if (conn_cb) {
+-        conn_cb(false, user_data);
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  if (g_ble_gatt.initialized &&
++      g_ble_gatt.connected_reported != connected)
++    {
++      g_ble_gatt.connected_reported = connected;
++      callback = g_ble_gatt.config.conn_cb;
++      user_data = g_ble_gatt.config.user_data;
++      changed = true;
+     }
++  pthread_mutex_unlock(&g_ble_gatt.lock);
+ 
+-    /* Restart advertising so phone can reconnect (skip if deinit'd) */
+-    pthread_mutex_lock(&g_gatt.lock);
+-    bool still_init = g_gatt.initialized;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    if (still_init) {
+-        adv_start();
++  if (changed && callback != NULL)
++    {
++      callback(connected, user_data);
+     }
+ }
+ 
+-static void on_mtu_changed(gatts_handle_t srv_handle, bt_address_t* addr,
+-    uint32_t mtu)
++static void ble_gatt_native_connection(FAR struct bt_conn_s *conn,
++                                       bool connected,
++                                       FAR void *user_data)
+ {
+-    syslog(LOG_INFO, "[%s] MTU changed: %u\n", TAG, (unsigned)mtu);
++  (void)conn;
++  (void)user_data;
+ 
+-    pthread_mutex_lock(&g_gatt.lock);
+-    g_gatt.mtu = (uint16_t)mtu;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-}
++  if (!connected)
++    {
++      pthread_mutex_lock(&g_ble_gatt.lock);
++      g_ble_gatt.response_length = 0;
++      memset(g_ble_gatt.response, 0, sizeof(g_ble_gatt.response));
++      if (g_ble_gatt.initialized && !g_ble_gatt.stopping)
++        {
++          g_ble_gatt.advertise_requested = true;
++          pthread_cond_signal(&g_ble_gatt.advertise_cond);
++        }
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++    }
+ 
+-static void on_attr_table_added(gatts_handle_t srv_handle,
+-    gatt_status_t status, uint16_t attr_handle)
+-{
+-    syslog(LOG_INFO, "[%s] Attr table added, handle=0x%04x status=%d\n",
+-        TAG, attr_handle, status);
++  ble_gatt_report_connection(connected);
+ }
+ 
+-static void on_notify_complete(gatts_handle_t srv_handle, bt_address_t* addr,
+-    gatt_status_t status, uint16_t attr_handle)
++static int ble_gatt_rx_write(FAR struct bt_conn_s *conn,
++                             FAR const struct bt_gatt_attr_s *attr,
++                             FAR const void *buffer, uint8_t length,
++                             uint16_t offset)
+ {
+-    if (status != GATT_STATUS_SUCCESS) {
+-        syslog(LOG_ERR, "[%s] Notify failed, handle=0x%04x status=%d\n",
+-            TAG, attr_handle, status);
+-    }
+-}
++  ble_gatt_recv_cb_t callback;
++  FAR void *user_data;
+ 
+-/* RX Characteristic write callback - data from phone */
+-static uint16_t rx_char_on_write(gatts_handle_t srv_handle, bt_address_t* addr,
+-    uint16_t attr_handle, const uint8_t* value,
+-    uint16_t length, uint16_t offset)
+-{
+-    (void)srv_handle;
+-    (void)addr;
+-    (void)attr_handle;
+-    (void)offset;
++  (void)conn;
++  (void)attr;
+ 
+-    if (value && length > 0 && g_gatt.config.recv_cb) {
+-        g_gatt.config.recv_cb(value, length, g_gatt.config.user_data);
++  if (buffer == NULL || length == 0 || offset != 0)
++    {
++      return -EINVAL;
+     }
+ 
+-    return length;
+-}
+-
+-/* TX CCC write callback - enable/disable notifications */
+-static uint16_t tx_ccc_on_write(gatts_handle_t srv_handle, bt_address_t* addr,
+-    uint16_t attr_handle, const uint8_t* value,
+-    uint16_t length, uint16_t offset)
+-{
+-    (void)srv_handle;
+-    (void)addr;
+-    (void)attr_handle;
+-    (void)offset;
+-
+-    if (!value || length < 2) {
+-        return 0; /* Reject short write */
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  if (!g_ble_gatt.initialized || g_ble_gatt.stopping ||
++      !g_ble_gatt.connected_reported)
++    {
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      return -EACCES;
+     }
+ 
+-    uint16_t ccc_val = value[0] | (value[1] << 8);
+-    bool enabled = (ccc_val & 0x0001) != 0; /* Notification bit */
++  callback = g_ble_gatt.config.recv_cb;
++  user_data = g_ble_gatt.config.user_data;
++  pthread_mutex_unlock(&g_ble_gatt.lock);
+ 
+-    pthread_mutex_lock(&g_gatt.lock);
+-    g_gatt.notify_enabled = enabled;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    syslog(LOG_INFO, "[%s] TX notify %s\n", TAG,
+-        enabled ? "enabled" : "disabled");
++  if (callback != NULL)
++    {
++      callback(buffer, length, user_data);
++    }
+ 
+-    return length;
++  return length;
+ }
+ 
+-static const gatts_callbacks_t g_gatts_cbs = {
+-    .size = sizeof(gatts_callbacks_t),
+-    .on_connected = on_connected,
+-    .on_disconnected = on_disconnected,
+-    .on_attr_table_added = on_attr_table_added,
+-    .on_attr_table_removed = NULL,
+-    .on_notify_complete = on_notify_complete,
+-    .on_mtu_changed = on_mtu_changed,
+-    .on_phy_read = NULL,
+-    .on_phy_updated = NULL,
+-    .on_conn_param_changed = NULL,
+-};
+-
+-/* -- Service Setup (using GATT_H_* macros like in-tree examples) -- */
+-
+-static gatt_attr_db_t s_nus_attr_db[] = {
+-    /* NUS Service */
+-    GATT_H_PRIMARY_SERVICE(BT_UUID_DECLARE_128(NUS_SVC_UUID_BYTES), NUS_SVC_ID),
+-    /* TX Characteristic (notify to phone) */
+-    GATT_H_CHARACTERISTIC_AUTO_RSP(BT_UUID_DECLARE_128(NUS_TX_UUID_BYTES),
+-        GATT_PROP_NOTIFY, 0, NULL, 0, NUS_TX_CHR_ID),
+-    /* TX CCC (enable/disable notifications) */
+-    GATT_H_CCCD(GATT_PERM_READ | GATT_PERM_WRITE,
+-        tx_ccc_on_write, NUS_TX_CCC_ID),
+-    /* RX Characteristic (write from phone) */
+-    GATT_H_CHARACTERISTIC_USER_RSP(BT_UUID_DECLARE_128(NUS_RX_UUID_BYTES),
+-        GATT_PROP_WRITE | GATT_PROP_WRITE_NR, GATT_PERM_WRITE,
+-        NULL, rx_char_on_write, NUS_RX_CHR_ID),
+-};
+-
+-static gatt_srv_db_t s_nus_service_db = {
+-    .attr_db = s_nus_attr_db,
+-    .attr_num = sizeof(s_nus_attr_db) / sizeof(gatt_attr_db_t),
+-};
+-
+-static int setup_nus_service(void)
++static int ble_gatt_tx_read(FAR struct bt_conn_s *conn,
++                            FAR const struct bt_gatt_attr_s *attr,
++                            FAR void *buffer, uint8_t length,
++                            uint16_t offset)
+ {
+-    bt_status_t status;
++  int ret;
+ 
+-    status = bt_gatts_add_attr_table(g_gatt.srv_handle, &s_nus_service_db);
+-    if (status != BT_STATUS_SUCCESS) {
+-        syslog(LOG_ERR, "[%s] Failed to add attr table: %d\n", TAG, status);
+-        return -EIO;
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  if (!g_ble_gatt.initialized || g_ble_gatt.stopping ||
++      !g_ble_gatt.connected_reported)
++    {
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      return -EACCES;
+     }
+ 
+-    syslog(LOG_INFO, "[%s] NUS service registered\n", TAG);
+-    return 0;
++  ret = bt_gatt_attr_read(conn, attr, buffer, length, offset,
++                          g_ble_gatt.response,
++                          g_ble_gatt.response_length);
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++  return ret;
+ }
+ 
+-/* -- BLE Advertising ------------------------------------------ */
+-
+-#define BLE_GATT_ADV_NAME "VelaClaw"
+-#define BLE_GATT_ADV_INTERVAL 320 /* 200ms (320 * 0.625ms) */
+-#define BLE_GATT_APPEARANCE 0x00C1 /* Watch: Sports Watch */
+-
+-static void on_adv_start(bt_advertiser_t* adv, uint8_t adv_id,
+-    uint8_t status)
++static void ble_gatt_ccc_changed(uint16_t value)
+ {
+-    if (status == BT_ADV_STATUS_SUCCESS) {
+-        syslog(LOG_INFO, "[%s] Advertising started (id=%u)\n", TAG, adv_id);
+-        pthread_mutex_lock(&g_gatt.lock);
+-        g_gatt.advertising = true;
+-        pthread_mutex_unlock(&g_gatt.lock);
+-    } else {
+-        syslog(LOG_ERR, "[%s] Advertising start failed: %u\n", TAG, status);
+-    }
+-}
++  /* Kept for GATT database compatibility.  Provisioning uses Read/Write. */
+ 
+-static void on_adv_stopped(bt_advertiser_t* adv, uint8_t adv_id)
+-{
+-    syslog(LOG_INFO, "[%s] Advertising stopped (id=%u)\n", TAG, adv_id);
+-    pthread_mutex_lock(&g_gatt.lock);
+-    g_gatt.advertising = false;
+-    g_gatt.adv_handle = NULL;
+-    pthread_mutex_unlock(&g_gatt.lock);
++  (void)value;
+ }
+ 
+-static const advertiser_callback_t g_adv_cbs = {
+-    .size = sizeof(advertiser_callback_t),
+-    .on_advertising_start = on_adv_start,
+-    .on_advertising_stopped = on_adv_stopped,
++static const struct bt_gatt_attr_s g_nus_attributes[] =
++{
++  BT_GATT_PRIMARY_SERVICE(NUS_SERVICE_HANDLE, &g_nus_service_uuid),
++  BT_GATT_CHARACTERISTIC(NUS_RX_CHRC_HANDLE, &g_nus_rx_chrc),
++  BT_GATT_DESCRIPTOR(NUS_RX_VALUE_HANDLE, &g_nus_rx_uuid,
++                     BT_GATT_PERM_WRITE,
++                     NULL, ble_gatt_rx_write, NULL),
++  BT_GATT_CHARACTERISTIC(NUS_TX_CHRC_HANDLE, &g_nus_tx_chrc),
++  BT_GATT_DESCRIPTOR(NUS_TX_VALUE_HANDLE, &g_nus_tx_uuid,
++                     BT_GATT_PERM_READ,
++                     ble_gatt_tx_read, NULL, NULL),
++  BT_GATT_CCC(NUS_TX_CCC_HANDLE, NUS_TX_VALUE_HANDLE,
++              g_nus_tx_ccc, ble_gatt_ccc_changed)
+ };
+ 
+-static int adv_start(void)
++static int ble_gatt_advertise(bool start)
+ {
+-    pthread_mutex_lock(&g_gatt.lock);
+-    if (!g_gatt.initialized || !g_gatt.bt_ins) {
+-        pthread_mutex_unlock(&g_gatt.lock);
+-        return -ENODEV;
+-    }
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    /* Build advertising data: flags + NUS service UUID */
+-    advertiser_data_t* adv_data = advertiser_data_new();
+-    if (!adv_data) {
+-        return -ENOMEM;
++  struct btreq_s request;
++  struct bt_eir_s advertising[3];
++  struct bt_eir_s scan_response[2];
++  int socket_fd;
++  int ret;
++
++  memset(&request, 0, sizeof(request));
++  strlcpy(request.btr_name, BLE_GATT_INTERFACE,
++          sizeof(request.btr_name));
++
++  socket_fd = socket(PF_BLUETOOTH, SOCK_RAW, BTPROTO_L2CAP);
++  if (socket_fd < 0)
++    {
++      return -errno;
+     }
+ 
+-    bt_uuid_t svc_uuid;
+-    static const uint8_t svc_bytes[] = { NUS_SVC_UUID_BYTES };
+-    bt_uuid128_create(&svc_uuid, svc_bytes);
+-    advertiser_data_add_service_uuid(adv_data, &svc_uuid);
+-    advertiser_data_set_appearance(adv_data, BLE_GATT_APPEARANCE);
+-
+-    uint16_t adv_len = 0;
+-    uint8_t* p_adv = advertiser_data_build(adv_data, &adv_len);
+-
+-    /* Build scan response: device name */
+-    advertiser_data_t* scan_rsp = advertiser_data_new();
+-    if (!scan_rsp) {
+-        advertiser_data_free(adv_data);
+-        return -ENOMEM;
+-    }
+-    advertiser_data_set_name(scan_rsp, BLE_GATT_ADV_NAME);
+-
+-    uint16_t rsp_len = 0;
+-    uint8_t* p_rsp = advertiser_data_build(scan_rsp, &rsp_len);
+-
+-    /* Set advertising parameters */
+-    ble_adv_params_t params;
+-    memset(&params, 0, sizeof(params));
+-    params.adv_type = BT_LE_ADV_IND; /* Connectable undirected */
+-    params.own_addr_type = BT_LE_ADDR_TYPE_PUBLIC;
+-    params.interval = BLE_GATT_ADV_INTERVAL;
+-    params.channel_map = BT_LE_ADV_CHANNEL_DEFAULT;
+-    params.filter_policy = BT_LE_ADV_FILTER_WHITE_LIST_FOR_NONE;
+-    params.duration = 0; /* Advertise indefinitely */
+-
+-    bt_advertiser_t* handle = bt_le_start_advertising(
+-        g_gatt.bt_ins, &params,
+-        p_adv, adv_len,
+-        p_rsp, rsp_len,
+-        (advertiser_callback_t*)&g_adv_cbs);
+-
+-    advertiser_data_free(adv_data);
+-    advertiser_data_free(scan_rsp);
+-
+-    if (!handle) {
+-        syslog(LOG_ERR, "[%s] Failed to start advertising\n", TAG);
+-        return -EIO;
++  if (!start)
++    {
++      ret = ioctl(socket_fd, SIOCBTADVSTOP,
++                  (unsigned long)((uintptr_t)&request));
++      close(socket_fd);
++      return ret < 0 ? -errno : 0;
+     }
+ 
+-    pthread_mutex_lock(&g_gatt.lock);
+-    g_gatt.adv_handle = handle;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    syslog(LOG_INFO, "[%s] Advertising starting...\n", TAG);
+-    return 0;
++  memset(advertising, 0, sizeof(advertising));
++  advertising[0].len = 2;
++  advertising[0].type = BT_EIR_FLAGS;
++  advertising[0].data[0] = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
++  advertising[1].len = 17;
++  advertising[1].type = BT_EIR_UUID128_ALL;
++  memcpy(advertising[1].data, g_nus_service_uuid.u.u128, 16);
++
++  memset(scan_response, 0, sizeof(scan_response));
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  scan_response[0].len = (uint8_t)(strlen(g_ble_gatt.device_name) + 1);
++  scan_response[0].type = BT_EIR_NAME_COMPLETE;
++  memcpy(scan_response[0].data, g_ble_gatt.device_name,
++         scan_response[0].len - 1);
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++
++  request.btr_advtype = BT_LE_ADV_IND;
++  request.btr_advad = advertising;
++  request.btr_advsd = scan_response;
++  ret = ioctl(socket_fd, SIOCBTADVSTART,
++              (unsigned long)((uintptr_t)&request));
++  close(socket_fd);
++  return ret < 0 ? -errno : 0;
+ }
+ 
+-static void adv_stop(void)
++static FAR void *ble_gatt_advertise_worker(FAR void *argument)
+ {
+-    pthread_mutex_lock(&g_gatt.lock);
+-    bt_advertiser_t* handle = g_gatt.adv_handle;
+-    g_gatt.adv_handle = NULL;
+-    g_gatt.advertising = false;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    if (handle && g_gatt.bt_ins) {
+-        bt_le_stop_advertising(g_gatt.bt_ins, handle);
+-    }
+-}
++  (void)argument;
+ 
+-/* -- Advertising Retry ---------------------------------------- */
+-
+-static void* adv_retry_thread(void* arg)
+-{
+-    (void)arg;
+-    int retries = 0;
+-    const int max_retries = 10;
+-    const int delay_sec = 3;
++  for (; ; )
++    {
++      int attempts;
+ 
+-    while (retries < max_retries) {
+-        sleep(delay_sec);
++      pthread_mutex_lock(&g_ble_gatt.lock);
++      while (!g_ble_gatt.stopping && !g_ble_gatt.advertise_requested)
++        {
++          pthread_cond_wait(&g_ble_gatt.advertise_cond,
++                            &g_ble_gatt.lock);
++        }
++      if (g_ble_gatt.stopping)
++        {
++          pthread_mutex_unlock(&g_ble_gatt.lock);
++          break;
++        }
+ 
+-        pthread_mutex_lock(&g_gatt.lock);
+-        bool done = g_gatt.advertising || !g_gatt.initialized;
+-        pthread_mutex_unlock(&g_gatt.lock);
++      g_ble_gatt.advertise_requested = false;
++      pthread_mutex_unlock(&g_ble_gatt.lock);
+ 
+-        if (done) {
+-            if (g_gatt.advertising) {
+-                printf("[ble_gatt] advertising confirmed active\n");
+-            }
+-            break;
+-        }
++      for (attempts = 0; attempts < 10; attempts++)
++        {
++          bool stopping;
+ 
+-        retries++;
+-        printf("[ble_gatt] adv retry %d/%d...\n", retries, max_retries);
+-        int ret = adv_start();
+-        if (ret == 0) {
+-            /* Wait for async callback to confirm */
+-            sleep(1);
+-            pthread_mutex_lock(&g_gatt.lock);
+-            bool ok = g_gatt.advertising;
+-            pthread_mutex_unlock(&g_gatt.lock);
+-            if (ok) {
+-                printf("[ble_gatt] advertising started on retry %d\n", retries);
+-                break;
++          pthread_mutex_lock(&g_ble_gatt.lock);
++          stopping = g_ble_gatt.stopping;
++          pthread_mutex_unlock(&g_ble_gatt.lock);
++          if (stopping || ble_gatt_advertise(true) == 0)
++            {
++              break;
+             }
++          sleep(BLE_GATT_ADVERTISE_RETRY_SEC);
+         }
+     }
+ 
+-    if (retries >= max_retries) {
+-        printf("[ble_gatt] WARNING: advertising failed after %d retries\n",
+-            max_retries);
+-    }
+-
+-    return NULL;
++  return NULL;
+ }
+ 
+-/* -- Public API ---------------------------------------------- */
+-
+-int ble_gatt_init(const ble_gatt_config_t* config)
++int ble_gatt_init(FAR const ble_gatt_config_t *config)
+ {
+-    bt_status_t status;
+-    int ret;
++  pthread_attr_t attributes;
++  size_t name_length;
++  int ret;
+ 
+-    if (!config || !config->recv_cb) {
+-        return -EINVAL;
++  if (config == NULL || config->device_name == NULL ||
++      config->recv_cb == NULL)
++    {
++      return -EINVAL;
+     }
+ 
+-    pthread_mutex_lock(&g_gatt.lock);
+-    if (g_gatt.initialized) {
+-        pthread_mutex_unlock(&g_gatt.lock);
+-        return 0;
++  name_length = strlen(config->device_name);
++  if (name_length == 0 || name_length > BLE_GATT_DEVICE_NAME_MAX)
++    {
++      return -EINVAL;
+     }
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    printf("[ble_gatt] step 1: get BT instance\n");
+ 
+-    g_gatt.config = *config;
+-
+-    /* Mark as initializing to prevent double-init race.
+-     * Will be cleared on failure. */
+-    g_gatt.initialized = true;
+-
+-    /* Get BT instance */
+-    g_gatt.bt_ins = bluetooth_get_instance();
+-    if (!g_gatt.bt_ins) {
+-        printf("[ble_gatt] FAILED: no BT instance\n");
+-        goto fail;
+-    }
+-    printf("[ble_gatt] step 2: register GATT server\n");
+-
+-    /* Register GATT server */
+-    status = bt_gatts_register_service(g_gatt.bt_ins, &g_gatt.srv_handle,
+-        (gatts_callbacks_t*)&g_gatts_cbs);
+-    if (status != BT_STATUS_SUCCESS) {
+-        printf("[ble_gatt] FAILED: register service: %d\n", status);
+-        goto fail;
+-    }
+-    printf("[ble_gatt] step 3: setup NUS service\n");
+-
+-    /* Setup NUS service */
+-    ret = setup_nus_service();
+-    if (ret < 0) {
+-        printf("[ble_gatt] FAILED: setup NUS: %d\n", ret);
+-        bt_gatts_unregister_service(g_gatt.srv_handle);
+-        g_gatt.srv_handle = NULL;
+-        goto fail;
+-    }
+-    printf("[ble_gatt] step 4: start advertising\n");
+-
+-    /* Start BLE advertising so phones can discover us */
+-    ret = adv_start();
+-    if (ret < 0) {
+-        printf("[ble_gatt] WARNING: advertising failed: %d, will retry\n", ret);
+-        /* Non-fatal: service works, just not discoverable via scan.
+-         * Start a retry thread to attempt advertising after BT is fully ready. */
+-    } else {
+-        printf("[ble_gatt] advertising started OK\n");
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  if (g_ble_gatt.initialized)
++    {
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      return -EALREADY;
+     }
+ 
+-    /* Always start retry thread - even if adv_start returned 0,
+-     * the async on_adv_start callback may report failure later. */
++  memset(&g_ble_gatt.config, 0, sizeof(g_ble_gatt.config));
++  g_ble_gatt.config = *config;
++  memcpy(g_ble_gatt.device_name, config->device_name, name_length + 1);
++  g_ble_gatt.config.device_name = g_ble_gatt.device_name;
++  g_ble_gatt.stopping = false;
++  g_ble_gatt.response_length = 0;
++  memset(g_ble_gatt.response, 0, sizeof(g_ble_gatt.response));
++  g_ble_gatt.connected_reported = false;
++  g_ble_gatt.advertise_requested = false;
++  g_ble_gatt.initialized = true;
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++
++  /* Board bring-up registers a default GATT database and starts generic
++   * advertising.  Stop it before replacing the single native database and
++   * advertisement payload with the AI Vlog NUS service. */
++
++  ble_gatt_advertise(false);
++  usleep(100000);
++  bt_gatt_register(g_nus_attributes, nitems(g_nus_attributes));
++  bt_gatt_set_connection_callback(ble_gatt_native_connection, NULL);
++  ret = pthread_attr_init(&attributes);
++  if (ret != 0)
+     {
+-        pthread_t retry_thread;
+-        pthread_attr_t attr;
+-        pthread_attr_init(&attr);
+-        pthread_attr_setstacksize(&attr, 2048);
+-        pthread_create(&retry_thread, &attr, adv_retry_thread, NULL);
+-        pthread_attr_destroy(&attr);
+-        pthread_detach(retry_thread);
++      ble_gatt_advertise(false);
++      pthread_mutex_lock(&g_ble_gatt.lock);
++      g_ble_gatt.initialized = false;
++      memset(&g_ble_gatt.config, 0, sizeof(g_ble_gatt.config));
++      memset(g_ble_gatt.device_name, 0, sizeof(g_ble_gatt.device_name));
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      bt_gatt_set_connection_callback(NULL, NULL);
++      return -ret;
+     }
+ 
+-    /* Already marked initialized at the top; just log success */
+-    syslog(LOG_INFO, "[%s] BLE GATT channel ready\n", TAG);
+-    printf("[ble_gatt] init complete\n");
+-    return 0;
++  ret = pthread_attr_setstacksize(&attributes, 2048);
++  if (ret == 0)
++    {
++      ret = pthread_create(&g_ble_gatt.advertise_thread, &attributes,
++                           ble_gatt_advertise_worker, NULL);
++    }
++  pthread_attr_destroy(&attributes);
++  if (ret != 0)
++    {
++      ble_gatt_advertise(false);
++      pthread_mutex_lock(&g_ble_gatt.lock);
++      g_ble_gatt.initialized = false;
++      memset(&g_ble_gatt.config, 0, sizeof(g_ble_gatt.config));
++      memset(g_ble_gatt.device_name, 0, sizeof(g_ble_gatt.device_name));
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      bt_gatt_set_connection_callback(NULL, NULL);
++      return -ret;
++    }
+ 
+-fail:
+-    g_gatt.initialized = false;
+-    return ret ? ret : -EIO;
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  g_ble_gatt.advertise_thread_started = true;
++  g_ble_gatt.advertise_requested = true;
++  pthread_cond_signal(&g_ble_gatt.advertise_cond);
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++  printf("[ble_gatt] native NUS ready as %s\n", config->device_name);
++  return 0;
+ }
+ 
+ int ble_gatt_deinit(void)
+ {
+-    pthread_mutex_lock(&g_gatt.lock);
+-    if (!g_gatt.initialized) {
+-        pthread_mutex_unlock(&g_gatt.lock);
+-        return 0;
+-    }
+-    g_gatt.initialized = false;
+-    g_gatt.connected = false;
+-    g_gatt.notify_enabled = false;
+-    pthread_mutex_unlock(&g_gatt.lock);
++  pthread_t thread;
++  bool join_thread;
+ 
+-    adv_stop();
+-
+-    if (g_gatt.srv_handle) {
+-        bt_gatts_unregister_service(g_gatt.srv_handle);
+-        g_gatt.srv_handle = NULL;
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  if (!g_ble_gatt.initialized)
++    {
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      return 0;
+     }
+ 
+-    syslog(LOG_INFO, "[%s] BLE GATT channel stopped\n", TAG);
+-    return 0;
++  g_ble_gatt.stopping = true;
++  g_ble_gatt.initialized = false;
++  join_thread = g_ble_gatt.advertise_thread_started;
++  thread = g_ble_gatt.advertise_thread;
++  g_ble_gatt.advertise_thread_started = false;
++  g_ble_gatt.response_length = 0;
++  memset(g_ble_gatt.response, 0, sizeof(g_ble_gatt.response));
++  g_ble_gatt.advertise_requested = false;
++  pthread_cond_broadcast(&g_ble_gatt.advertise_cond);
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++  bt_gatt_set_connection_callback(NULL, NULL);
++
++  if (join_thread)
++    {
++      pthread_join(thread, NULL);
++    }
++  ble_gatt_advertise(false);
++  ble_gatt_report_connection(false);
++
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  memset(&g_ble_gatt.config, 0, sizeof(g_ble_gatt.config));
++  memset(g_ble_gatt.device_name, 0, sizeof(g_ble_gatt.device_name));
++  g_ble_gatt.stopping = false;
++  g_ble_gatt.connected_reported = false;
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++  return 0;
+ }
+ 
+ bool ble_gatt_is_connected(void)
+ {
+-    bool connected;
+-    pthread_mutex_lock(&g_gatt.lock);
+-    connected = g_gatt.connected;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-    return connected;
++  bool connected;
++
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  connected = g_ble_gatt.initialized && g_ble_gatt.connected_reported;
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++  return connected;
+ }
+ 
+-int ble_gatt_send(const uint8_t* data, uint16_t len)
++int ble_gatt_send(FAR const uint8_t *data, uint16_t length)
+ {
+-    gatts_handle_t srv_handle;
+-    bt_address_t peer_addr;
+-    uint16_t mtu;
+-
+-    if (!data || len == 0) {
+-        return -EINVAL;
+-    }
+-
+-    pthread_mutex_lock(&g_gatt.lock);
+-    if (!g_gatt.initialized || !g_gatt.connected || !g_gatt.notify_enabled) {
+-        pthread_mutex_unlock(&g_gatt.lock);
+-        return -ENOTCONN;
+-    }
+-    srv_handle = g_gatt.srv_handle;
+-    memcpy(&peer_addr, &g_gatt.peer_addr, sizeof(bt_address_t));
+-    mtu = g_gatt.mtu;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-
+-    /* BLE ATT payload = MTU - 3 */
+-    uint16_t max_payload = (mtu > 3) ? (mtu - 3) : 20;
+-    if (len > max_payload) {
+-        syslog(LOG_WARNING, "[%s] Data %u exceeds MTU payload %u\n",
+-            TAG, len, max_payload);
+-        return -EMSGSIZE;
++  if (data == NULL || length == 0 || length > BLE_GATT_RESPONSE_MAX)
++    {
++      return -EINVAL;
+     }
+ 
+-    bt_status_t status = bt_gatts_notify(srv_handle, &peer_addr,
+-        NUS_TX_CHR_ID,
+-        (uint8_t*)data, len);
+-    if (status != BT_STATUS_SUCCESS) {
+-        syslog(LOG_ERR, "[%s] Notify failed: %d\n", TAG, status);
+-        return -EIO;
++  pthread_mutex_lock(&g_ble_gatt.lock);
++  if (!g_ble_gatt.initialized || g_ble_gatt.stopping ||
++      !g_ble_gatt.connected_reported)
++    {
++      pthread_mutex_unlock(&g_ble_gatt.lock);
++      return -ENOTCONN;
+     }
+ 
+-    return len;
++  memset(g_ble_gatt.response, 0, sizeof(g_ble_gatt.response));
++  memcpy(g_ble_gatt.response, data, length);
++  g_ble_gatt.response_length = length;
++  pthread_mutex_unlock(&g_ble_gatt.lock);
++  return length;
+ }
+ 
+ uint16_t ble_gatt_get_mtu(void)
+ {
+-    uint16_t mtu;
+-    pthread_mutex_lock(&g_gatt.lock);
+-    mtu = g_gatt.mtu;
+-    pthread_mutex_unlock(&g_gatt.lock);
+-    return mtu;
++  return BLE_GATT_DEFAULT_MTU;
+ }
+diff --git a/src/infra/ble_gatt.h b/src/infra/ble_gatt.h
+index 2a01db6..9144136 100644
+--- a/src/infra/ble_gatt.h
++++ b/src/infra/ble_gatt.h
+@@ -61,7 +61,7 @@ typedef void (*ble_gatt_conn_cb_t)(bool connected, void* user_data);
+ 
+ /** Configuration */
+ typedef struct {
+-    const char* device_name; /* BLE device name for advertising */
++    const char* device_name; /* Required BLE advertising name (max 31 bytes) */
+     ble_gatt_recv_cb_t recv_cb; /* Data receive callback (required) */
+     ble_gatt_conn_cb_t conn_cb; /* Connection state callback (optional) */
+     void* user_data; /* User context for callbacks */
+@@ -77,11 +77,12 @@ int ble_gatt_deinit(void);
+ bool ble_gatt_is_connected(void);
+ 
+ /**
+- * Send data to connected phone via TX Characteristic notify
++ * Publish the latest complete response for the phone to retrieve with a GATT
++ * Read on the TX characteristic.
+  *
+- * @param data  Data to send
+- * @param len   Data length (max MTU - 3)
+- * @return bytes sent on success, <0 on error
++ * @param data  Complete response bytes
++ * @param len   Response length (maximum 768 bytes)
++ * @return bytes published, <0 on error
+  */
+ int ble_gatt_send(const uint8_t* data, uint16_t len);
+ 
+diff --git a/src/infra/config_store.c b/src/infra/config_store.c
+index da6c428..24d9f91 100644
+--- a/src/infra/config_store.c
++++ b/src/infra/config_store.c
+@@ -37,73 +37,198 @@ static const char *TAG = "cfgstore";
+ 
+ static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
++/* All config-store callers hold s_lock, so fixed internal-DRAM buffers are
++ * sufficient and avoid SD transfers to or from SPIRAM-backed heap/task
++ * memory.  Keep the JSON cap explicit rather than silently accepting a
++ * configuration too large for reliable board storage.
++ */
++#define CONFIG_STORE_JSON_CAPACITY 4096
++#define CONFIG_STORE_BLOCK_SIZE 512
++static char s_io_staging[CONFIG_STORE_BLOCK_SIZE]
++    __attribute__((aligned(64)));
++static char s_json_buffer[CONFIG_STORE_JSON_CAPACITY]
++    __attribute__((aligned(64)));
++
+ /* ── helpers ─────────────────────────────────────────────────── */
+ 
+ static int mkdirs(const char *path)
+ {
+     char tmp[256];
+-    snprintf(tmp, sizeof(tmp), "%s", path);
++    int ret = snprintf(tmp, sizeof(tmp), "%s", path);
++    if (ret < 0 || (size_t)ret >= sizeof(tmp)) {
++        errno = ENAMETOOLONG;
++        return ERROR;
++    }
++
+     for (char *p = tmp + 1; *p; p++) {
+         if (*p == '/') {
+             *p = '\0';
+-            mkdir(tmp, 0700);
++            if (mkdir(tmp, 0700) < 0 && errno != EEXIST)
++                return ERROR;
+             *p = '/';
+         }
+     }
+-    mkdir(tmp, 0700);
++
++    if (mkdir(tmp, 0700) < 0 && errno != EEXIST)
++        return ERROR;
++
+     return OK;
+ }
+ 
+ static cJSON *load_json(void)
+ {
+     FILE *f = fopen(AGENT_CONFIG_FILE, "r");
+-    if (!f) return cJSON_CreateObject();
+-
+-    fseek(f, 0, SEEK_END);
+-    long sz = ftell(f);
+-    fseek(f, 0, SEEK_SET);
++    cJSON *root;
++    size_t n;
++    long size;
+ 
+-    if (sz <= 0) { fclose(f); return cJSON_CreateObject(); }
++    if (!f)
++        return cJSON_CreateObject();
+ 
+-    char *buf = (char *)malloc((size_t)(sz + 1));
+-    if (!buf) { fclose(f); return cJSON_CreateObject(); }
++    if (fseek(f, 0, SEEK_END) < 0 ||
++        (size = ftell(f)) <= 0 ||
++        (size_t)size >= sizeof(s_json_buffer) ||
++        fseek(f, 0, SEEK_SET) < 0) {
++        fclose(f);
++        return cJSON_CreateObject();
++    }
+ 
+-    size_t n = fread(buf, 1, (size_t)sz, f);
+-    buf[n] = '\0';
++    n = fread(s_json_buffer, 1, (size_t)size, f);
++    if (n != (size_t)size || ferror(f)) {
++        fclose(f);
++        return cJSON_CreateObject();
++    }
++    s_json_buffer[n] = '\0';
+     fclose(f);
+ 
+-    cJSON *root = cJSON_Parse(buf);
+-    free(buf);
++    root = cJSON_Parse(s_json_buffer);
+     return root ? root : cJSON_CreateObject();
+ }
+ 
+ static int save_json(cJSON *root)
+ {
+-    char *str = cJSON_PrintUnformatted(root);
+-    if (!str) return ERROR;
+-
+-    /* Use open() with explicit 0600 to ensure config file is owner-only.
+-     * fopen("w") inherits umask which may be too permissive. */
+-    int fd = open(AGENT_CONFIG_FILE,
+-                  O_WRONLY | O_CREAT | O_TRUNC, 0600);
+-    if (fd < 0) { free(str); return ERROR; }
+-
+-    FILE *f = fdopen(fd, "w");
+-    if (!f) { close(fd); free(str); return ERROR; }
+-    fputs(str, f);
+-    fclose(f);
+-    free(str);
++    const char *temporary = AGENT_CONFIG_FILE ".tmp";
++    size_t length;
++    size_t padded_length;
++    size_t offset;
++    int saved_errno;
++    int fd = -1;
++
++    /* Serialize directly into internal DRAM.  Heap-backed cJSON output can
++     * reside in SPIRAM, which is not a safe SD/MMC DMA source on this board. */
++    if (!cJSON_PrintPreallocated(root, s_json_buffer,
++            sizeof(s_json_buffer), false)) {
++        errno = ENOSPC;
++        return ERROR;
++    }
++
++    length = strlen(s_json_buffer);
++    padded_length = (length + CONFIG_STORE_BLOCK_SIZE - 1) &
++        ~(CONFIG_STORE_BLOCK_SIZE - 1);
++    if (length < 2 || padded_length >= sizeof(s_json_buffer) ||
++        s_json_buffer[0] != '{' || s_json_buffer[length - 1] != '}') {
++        errno = ENOSPC;
++        return ERROR;
++    }
++
++    /* Keep every SD transfer sector-sized and aligned.  JSON permits trailing
++     * whitespace, so padding with spaces avoids a short final DMA transfer. */
++    memset(s_json_buffer + length, ' ', padded_length - length);
++
++    fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC, 0600);
++    if (fd < 0)
++        return ERROR;
++
++    for (offset = 0; offset < padded_length;
++         offset += CONFIG_STORE_BLOCK_SIZE) {
++        ssize_t written;
++        do {
++            written = write(fd, s_json_buffer + offset,
++                            CONFIG_STORE_BLOCK_SIZE);
++        } while (written < 0 && errno == EINTR);
++
++        if (written != CONFIG_STORE_BLOCK_SIZE) {
++            if (written >= 0)
++                errno = EIO;
++            goto fail_fd;
++        }
++    }
++
++    if (fsync(fd) < 0)
++        goto fail_fd;
++
++    if (close(fd) < 0) {
++        saved_errno = errno;
++        fd = -1;
++        unlink(temporary);
++        errno = saved_errno;
++        return ERROR;
++    }
++    fd = -1;
++
++    /* Verify all sectors before publishing the temporary file. */
++    fd = open(temporary, O_RDONLY);
++    if (fd < 0)
++        goto fail_unlink;
++
++    for (offset = 0; offset < padded_length;
++         offset += CONFIG_STORE_BLOCK_SIZE) {
++        ssize_t count;
++        do {
++            count = read(fd, s_io_staging, CONFIG_STORE_BLOCK_SIZE);
++        } while (count < 0 && errno == EINTR);
++
++        if (count != CONFIG_STORE_BLOCK_SIZE ||
++            memcmp(s_io_staging, s_json_buffer + offset,
++                   CONFIG_STORE_BLOCK_SIZE) != 0) {
++            errno = EIO;
++            syslog(LOG_ERR, "[%s] SD config verification failed\n", TAG);
++            goto fail_fd;
++        }
++    }
++
++    if (close(fd) < 0) {
++        saved_errno = errno;
++        fd = -1;
++        unlink(temporary);
++        errno = saved_errno;
++        return ERROR;
++    }
++    fd = -1;
++
++    if (rename(temporary, AGENT_CONFIG_FILE) < 0)
++        goto fail_unlink;
++
+     return OK;
++
++fail_fd:
++    saved_errno = errno;
++    if (fd >= 0)
++        close(fd);
++    unlink(temporary);
++    errno = saved_errno;
++    return ERROR;
++
++fail_unlink:
++    saved_errno = errno;
++    unlink(temporary);
++    errno = saved_errno;
++    return ERROR;
+ }
+ 
+ /* ── public API ──────────────────────────────────────────────── */
+ 
+ int config_store_init(void)
+ {
+-    mkdirs(AGENT_DATA_DIR);
+-    mkdirs(AGENT_CONFIG_DIR);
+-    mkdirs(AGENT_MEMORY_DIR);
+-    mkdirs(AGENT_SESSION_DIR);
++    if (mkdirs(AGENT_DATA_DIR) < 0 ||
++        mkdirs(AGENT_CONFIG_DIR) < 0 ||
++        mkdirs(AGENT_MEMORY_DIR) < 0 ||
++        mkdirs(AGENT_SESSION_DIR) < 0) {
++        syslog(LOG_ERR, "[%s] Failed to create config directories: %d\n",
++            TAG, errno);
++        return ERROR;
++    }
++
+     syslog(LOG_INFO, "[%s] Config store ready at %s\n", TAG, AGENT_CONFIG_FILE);
+     return OK;
+ }
+@@ -136,6 +261,44 @@ int claw_config_set(const char *key, const char *value)
+     return ret;
+ }
+ 
++int claw_config_set_many(const struct claw_config_pair_s *pairs,
++                         size_t count)
++{
++    if (!pairs || count == 0) {
++        errno = EINVAL;
++        return ERROR;
++    }
++
++    pthread_mutex_lock(&s_lock);
++    cJSON *root = load_json();
++    if (!root) {
++        pthread_mutex_unlock(&s_lock);
++        errno = ENOMEM;
++        return ERROR;
++    }
++
++    int ret = OK;
++    for (size_t i = 0; i < count; i++) {
++        if (!pairs[i].key || !pairs[i].value) {
++            errno = EINVAL;
++            ret = ERROR;
++            break;
++        }
++        cJSON_DeleteItemFromObject(root, pairs[i].key);
++        if (!cJSON_AddStringToObject(root, pairs[i].key, pairs[i].value)) {
++            errno = ENOMEM;
++            ret = ERROR;
++            break;
++        }
++    }
++
++    if (ret == OK)
++        ret = save_json(root);
++    cJSON_Delete(root);
++    pthread_mutex_unlock(&s_lock);
++    return ret;
++}
++
+ int config_del(const char *key)
+ {
+     pthread_mutex_lock(&s_lock);
+diff --git a/src/infra/config_store.h b/src/infra/config_store.h
+index 8327fff..88273ae 100644
+--- a/src/infra/config_store.h
++++ b/src/infra/config_store.h
+@@ -43,6 +43,15 @@ int claw_config_get(const char *key, char *buf, size_t buf_size);
+ /** Write (or overwrite) a string value and persist to disk. */
+ int claw_config_set(const char *key, const char *value);
+ 
++struct claw_config_pair_s {
++    const char *key;
++    const char *value;
++};
++
++/** Atomically update multiple string values in one config-file commit. */
++int claw_config_set_many(const struct claw_config_pair_s *pairs,
++                         size_t count);
++
+ /** Delete a key. Returns OK even if key was absent. */
+ int config_del(const char *key);
+ 
+diff --git a/src/infra/network_manager.c b/src/infra/network_manager.c
+index 00cc296..fd4babe 100644
+--- a/src/infra/network_manager.c
++++ b/src/infra/network_manager.c
+@@ -30,9 +30,17 @@ static const char* TAG = "netmgr";
+ 
+ static char s_ip_str[INET_ADDRSTRLEN] = "0.0.0.0";
+ 
++#if !defined(CONFIG_ARCH_CHIP_GOLDFISH_ARM64) && \
++    !defined(CONFIG_ARCH_CHIP_QEMU_ARM) && \
++    !defined(CONFIG_AI_AGENT_NET_RPMSG)
++static bool network_wifi_is_associated(const char* dev);
++#endif
++
+ bool network_is_connected(void)
+ {
+     struct ifaddrs* ifa_list = NULL;
++
++    strlcpy(s_ip_str, "0.0.0.0", sizeof(s_ip_str));
+     if (getifaddrs(&ifa_list) == 0) {
+         for (struct ifaddrs* ifa = ifa_list; ifa; ifa = ifa->ifa_next) {
+             if (!ifa->ifa_addr)
+@@ -51,6 +59,19 @@ bool network_is_connected(void)
+             if (addr == 0)
+                 continue;
+ 
++#if !defined(CONFIG_ARCH_CHIP_GOLDFISH_ARM64) && \
++    !defined(CONFIG_ARCH_CHIP_QEMU_ARM) && \
++    !defined(CONFIG_AI_AGENT_NET_RPMSG)
++            /* ESP32-S3 brings wlan0 up with 10.0.0.2 before DHCP.  It is
++             * only usable after association and after DHCP replaces that
++             * placeholder address. */
++            if (ifa->ifa_name && strcmp(ifa->ifa_name, "wlan0") == 0 &&
++                (addr == 0x0a000002 ||
++                 !network_wifi_is_associated("wlan0"))) {
++                continue;
++            }
++#endif
++
+             inet_ntop(AF_INET, &sin->sin_addr, s_ip_str, sizeof(s_ip_str));
+             syslog(LOG_INFO, "[%s] Found iface %s addr %s\n", TAG,
+                 ifa->ifa_name ? ifa->ifa_name : "?", s_ip_str);
+@@ -766,43 +787,133 @@ int network_wifi_reconnect(void)
+ }
+ 
+ #else
+-/* Real hardware: use NuttX wapi shell command to join WiFi */
++/* Real hardware: use NuttX wapi shell commands to join Wi-Fi. */
+ #include "infra/config_store.h"
+ #include "agent_config.h"
++#include <netutils/netlib.h>
++#include <pthread.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <wireless/wapi.h>
+ 
+-/*
+- * Wrap src in single quotes for safe use inside a system() shell command.
+- * Every embedded ' is replaced by the sequence '\'' so arbitrary SSID/PSK
+- * strings (spaces, semicolons, ampersands, etc.) cannot break the command.
+- * Returns 0 on success, -1 if buf is too small.
+- */
+-static int shell_quote(const char* src, char* buf, size_t buf_size)
+-{
+-    size_t out = 0;
+-    if (buf_size < 3) return -1; /* need at least '' + NUL */
+-    buf[out++] = '\'';
+-    for (const char* p = src; *p; p++) {
+-        if (*p == '\'') {
+-            if (out + 4 >= buf_size) return -1;
+-            buf[out++] = '\'';
+-            buf[out++] = '\\';
+-            buf[out++] = '\'';
+-            buf[out++] = '\'';
+-        } else {
+-            if (out + 1 >= buf_size) return -1;
+-            buf[out++] = *p;
++#define WIFI_ASSOC_RETRIES   20
++#define WIFI_ASSOC_DELAY_US  500000
++#define WIFI_DHCP_RETRIES    3
++#define WIFI_DHCP_DELAY_US   1000000
++
++static pthread_mutex_t s_wifi_lock = PTHREAD_MUTEX_INITIALIZER;
++
++static bool network_wifi_is_associated(const char* dev)
++{
++    char essid[WAPI_ESSID_MAX_SIZE + 1] = { 0 };
++    enum wapi_essid_flag_e flag = WAPI_ESSID_OFF;
++    int sock;
++    int ret;
++
++    sock = socket(AF_INET, SOCK_DGRAM, 0);
++    if (sock < 0) {
++        return false;
++    }
++
++    ret = wapi_get_essid(sock, dev, essid, &flag);
++    close(sock);
++
++    return ret >= 0 && flag == WAPI_ESSID_ON && essid[0] != '\0';
++}
++
++static int network_wifi_wait_associated(const char* dev)
++{
++    for (int retry = 0; retry < WIFI_ASSOC_RETRIES; retry++) {
++        if (network_wifi_is_associated(dev)) {
++            return OK;
+         }
++
++        usleep(WIFI_ASSOC_DELAY_US);
+     }
+-    if (out + 1 >= buf_size) return -1;
+-    buf[out++] = '\'';
+-    buf[out]   = '\0';
+-    return 0;
++
++    syslog(LOG_ERR, "[%s] WiFi not associated with an AP\n", TAG);
++    return ERROR;
+ }
+ 
+-int network_wifi_connect(const char* iface, const char* ssid,
++static int network_wifi_configure_wapi(const char* dev, const char* ssid,
+     const char* pass)
++{
++    size_t pass_len = pass ? strlen(pass) : 0;
++    int sock;
++    int ret;
++
++    if (strlen(ssid) > WAPI_ESSID_MAX_SIZE) {
++        syslog(LOG_ERR, "[%s] WiFi SSID is too long\n", TAG);
++        return ERROR;
++    }
++
++    if (pass_len < 8 || pass_len > 63) {
++        syslog(LOG_ERR,
++            "[%s] WPA2 password must contain 8 to 63 characters\n", TAG);
++        return ERROR;
++    }
++
++    sock = socket(AF_INET, SOCK_DGRAM, 0);
++    if (sock < 0) {
++        syslog(LOG_ERR, "[%s] Cannot open WAPI socket: %d\n", TAG, errno);
++        return ERROR;
++    }
++
++    ret = wapi_set_mode(sock, dev, WAPI_MODE_MANAGED);
++    if (ret < 0) {
++        syslog(LOG_ERR, "[%s] Set WiFi mode failed: %d\n", TAG, ret);
++        goto out;
++    }
++
++    /* ESP32-S3 defaults to regulatory domain 01, which rejects association
++     * on channel 13 even though scans can see it.  The target phone hotspot
++     * operates in China and may automatically select channels 12 or 13. */
++    ret = wapi_set_country(sock, dev, "CN");
++    if (ret < 0) {
++        syslog(LOG_ERR, "[%s] Set WiFi country failed: %d\n", TAG, ret);
++        goto out;
++    }
++
++    ret = wpa_driver_wext_set_auth_param(sock, dev, IW_AUTH_WPA_VERSION,
++        IW_AUTH_WPA_VERSION_WPA2);
++    if (ret < 0) {
++        syslog(LOG_ERR, "[%s] Set WPA2 authentication failed: %d\n",
++            TAG, ret);
++        goto out;
++    }
++
++    ret = wpa_driver_wext_set_auth_param(sock, dev,
++        IW_AUTH_CIPHER_PAIRWISE, IW_AUTH_CIPHER_CCMP);
++    if (ret < 0) {
++        syslog(LOG_ERR, "[%s] Set CCMP cipher failed: %d\n", TAG, ret);
++        goto out;
++    }
++
++    ret = wpa_driver_wext_set_key_ext(sock, dev, WPA_ALG_CCMP,
++        pass, pass_len);
++    if (ret < 0) {
++        syslog(LOG_ERR, "[%s] Set WPA2 password failed: %d\n", TAG, ret);
++        goto out;
++    }
++
++    /* Keep configuration and association as separate operations, matching
++     * the board-proven manual WAPI sequence without exposing credentials to
++     * an NSH command line.
++     */
++
++    usleep(500000);
++    ret = wapi_set_essid(sock, dev, ssid, WAPI_ESSID_ON);
++    if (ret < 0) {
++        syslog(LOG_ERR, "[%s] Associate with WiFi AP failed: %d\n", TAG, ret);
++    }
++
++out:
++    close(sock);
++    return ret < 0 ? ERROR : OK;
++}
++
++static int network_wifi_connect_internal(const char* iface,
++    const char* ssid, const char* pass, bool persist)
+ {
+     if (!ssid || ssid[0] == '\0') {
+         syslog(LOG_ERR, "[%s] wifi_connect: SSID required\n", TAG);
+@@ -810,95 +921,106 @@ int network_wifi_connect(const char* iface, const char* ssid,
+     }
+ 
+     const char* dev = (iface && iface[0]) ? iface : "wlan0";
+-    char cmd[512];
+ 
+-    /* P2: single-quote ssid/pass so spaces and shell metacharacters in
+-     * Wi-Fi credentials cannot break or inject into the wapi commands. */
+-    char q_ssid[192], q_pass[384];
+-    if (shell_quote(ssid, q_ssid, sizeof(q_ssid)) != 0) {
+-        syslog(LOG_ERR, "[%s] wifi_connect: SSID too long or unquotable\n", TAG);
++    syslog(LOG_INFO, "[%s] Connecting WiFi on %s\n", TAG, dev);
++
++    if (netlib_ifup(dev) < 0) {
++        syslog(LOG_ERR, "[%s] ifup %s failed: %d\n", TAG, dev, errno);
+         return ERROR;
+     }
+-    if (pass && pass[0] && shell_quote(pass, q_pass, sizeof(q_pass)) != 0) {
+-        syslog(LOG_ERR, "[%s] wifi_connect: PSK too long or unquotable\n", TAG);
++
++    usleep(500000); /* wait for driver ready */
++
++    if (network_wifi_configure_wapi(dev, ssid, pass) < 0) {
++        syslog(LOG_ERR,
++            "[%s] WiFi association timed out; check the password and "
++            "use a 2.4 GHz WPA2 hotspot\n",
++            TAG);
+         return ERROR;
+     }
+ 
+-    syslog(LOG_INFO, "[%s] Connecting WiFi SSID=%s on %s\n", TAG, ssid, dev);
++    if (network_wifi_wait_associated(dev) < 0) {
++        return ERROR;
++    }
+ 
+-    snprintf(cmd, sizeof(cmd), "ifup %s", dev); /* bring up iface first */
+-    system(cmd);
+-    usleep(500000); /* wait for driver ready */
++    /* The station link event can precede readiness for DHCP traffic.
++     * Allow the link to settle, then retry renew without reconnecting or
++     * reapplying credentials.
++     */
+ 
+-    snprintf(cmd, sizeof(cmd), "wapi mode %s 2", dev); /* MANAGED */
+-    system(cmd);
+-
+-    if (pass && pass[0]) {
+-        snprintf(cmd, sizeof(cmd), "wapi psk %s %s 3", dev, q_pass);
+-        system(cmd);
+-    }
+-
+-    snprintf(cmd, sizeof(cmd), "wapi essid %s %s 1", dev, q_ssid);
+-    system(cmd);
+-    usleep(2000000); /* wait for AP association */
+-
+-    /* P1: verify WiFi association before requesting DHCP.
+-     * 'wapi status' always exits 0 (it just prints iface state), so
+-     * checking its return code is useless. Instead, parse the output
+-     * for "Not-Associated" which wapi prints when no AP is joined.
+-     * If popen fails we fall through and let network_wait_connected
+-     * handle the timeout. */
+-    {
+-        bool associated = true;
+-        snprintf(cmd, sizeof(cmd), "wapi status %s", dev);
+-        FILE* fp = popen(cmd, "r");
+-        if (fp) {
+-            char line[256];
+-            while (fgets(line, sizeof(line), fp)) {
+-                if (strstr(line, "Not-Associated")) {
+-                    associated = false;
+-                    break;
+-                }
+-            }
+-            pclose(fp);
++    usleep(WIFI_DHCP_DELAY_US);
++    for (int retry = 0; retry < WIFI_DHCP_RETRIES; retry++) {
++        int dhcp_ret = netlib_obtain_ipv4addr(dev);
++        if (dhcp_ret == OK) {
++            break;
+         }
+-        if (!associated) {
++
++        syslog(LOG_ERR,
++            "[%s] DHCP attempt %d/%d failed: ret=%d errno=%d\n",
++            TAG, retry + 1, WIFI_DHCP_RETRIES, dhcp_ret, errno);
++        if (retry + 1 == WIFI_DHCP_RETRIES) {
++            syslog(LOG_ERR, "[%s] DHCP failed after %d attempts\n",
++                TAG, WIFI_DHCP_RETRIES);
++            return ERROR;
++        }
++
++        usleep(WIFI_DHCP_DELAY_US);
++    }
++
++    if (network_wait_connected(15000) < 0) {
++        syslog(LOG_WARNING, "[%s] No IP after DHCP\n", TAG);
++        return ERROR;
++    }
++
++    /* Save only credentials that completed association and DHCP.  Always
++     * write the PSK slot so switching to an open AP clears a stale PSK. */
++    if (persist) {
++        struct claw_config_pair_s credentials[2] = {
++            { AGENT_CFG_KEY_WIFI_SSID, ssid },
++            { AGENT_CFG_KEY_WIFI_PASS, (pass && pass[0]) ? pass : "" },
++        };
++
++        if (claw_config_set_many(credentials, 2) < 0) {
+             syslog(LOG_ERR,
+-                "[%s] WiFi not associated (no carrier), skipping DHCP\n", TAG);
++                "[%s] Failed to persist WiFi credentials: %d\n",
++                TAG, errno);
+             return ERROR;
+         }
+     }
+ 
+-    snprintf(cmd, sizeof(cmd), "renew %s", dev); /* DHCP */
+-    system(cmd);
++    syslog(LOG_INFO, "[%s] WiFi connected: %s\n", TAG, network_get_ip());
++    return OK;
++}
+ 
+-    /* Persist credentials.
+-     * P2: always write the PSK slot — even when pass is empty — so that
+-     * switching from a secured AP to an open one clears the stale PSK.
+-     * network_wifi_reconnect() would otherwise re-send the old wapi psk
+-     * command on the next boot, breaking reconnect for open networks. */
+-    agent_config_set(AGENT_CFG_KEY_WIFI_SSID, ssid);
+-    agent_config_set(AGENT_CFG_KEY_WIFI_PASS, (pass && pass[0]) ? pass : "");
++int network_wifi_connect(const char* iface, const char* ssid,
++    const char* pass)
++{
++    int ret;
+ 
+-    int err = network_wait_connected(15000);
+-    if (err == OK)
+-        syslog(LOG_INFO, "[%s] WiFi connected: %s\n", TAG, network_get_ip());
+-    else
+-        syslog(LOG_WARNING, "[%s] No IP after 15s — check SSID/password\n", TAG);
+-    return err;
++    pthread_mutex_lock(&s_wifi_lock);
++    ret = network_wifi_connect_internal(iface, ssid, pass, true);
++    pthread_mutex_unlock(&s_wifi_lock);
++    return ret;
+ }
+ 
+ int network_wifi_reconnect(void)
+ {
+     char ssid[64] = { 0 };
+     char pass[128] = { 0 };
+-    if (agent_config_get(AGENT_CFG_KEY_WIFI_SSID, ssid, sizeof(ssid)) != OK || !ssid[0]) {
++    int ret;
++
++    if (agent_config_get(AGENT_CFG_KEY_WIFI_SSID, ssid, sizeof(ssid)) != OK ||
++        !ssid[0]) {
+         syslog(LOG_WARNING,
+             "[%s] No saved WiFi credentials. Use CLI: set_wifi <ssid> <pass>\n",
+             TAG);
+         return ERROR;
+     }
++
+     agent_config_get(AGENT_CFG_KEY_WIFI_PASS, pass, sizeof(pass));
+-    return network_wifi_connect(NULL, ssid, pass);
++    pthread_mutex_lock(&s_wifi_lock);
++    ret = network_wifi_connect_internal(NULL, ssid, pass, false);
++    pthread_mutex_unlock(&s_wifi_lock);
++    return ret;
+ }
+ #endif
+diff --git a/src/infra/vela_tls.c b/src/infra/vela_tls.c
+index 0b36760..7987940 100644
+--- a/src/infra/vela_tls.c
++++ b/src/infra/vela_tls.c
+@@ -40,12 +40,27 @@
+ #include "mbedtls/entropy.h"
+ #include "mbedtls/error.h"
+ #include "mbedtls/net_sockets.h"
++#include "mbedtls/sha256.h"
+ #include "mbedtls/ssl.h"
++#include "mbedtls/ssl_ciphersuites.h"
+ 
+ #include <fcntl.h>
+ #include <pthread.h>
+ #include <time.h>
+ 
++#define VELA_TLS_CLIENT_FLIGHT_MAX 512
++
++typedef struct {
++    mbedtls_ssl_context ssl;
++    mbedtls_ssl_config cfg;
++    mbedtls_net_context net;
++    mbedtls_ctr_drbg_context ctr_drbg;
++    unsigned char tx_flight[VELA_TLS_CLIENT_FLIGHT_MAX];
++    size_t tx_flight_len;
++    bool tx_ccs_sent;
++    bool write_nonblocking;
++} tls_ctx_t;
++
+ static int simple_entropy_func(void* data, unsigned char* output, size_t len)
+ {
+     (void)data;
+@@ -61,6 +76,189 @@ static int simple_entropy_func(void* data, unsigned char* output, size_t len)
+ 
+ static const char* TAG = "vela_tls";
+ 
++static int vela_tls_net_recv(void* context, unsigned char* buf, size_t len)
++{
++    tls_ctx_t* tls = context;
++    mbedtls_net_context* net = tls ? &tls->net : NULL;
++    ssize_t ret;
++    int err;
++
++    if (!net || net->fd < 0) {
++        return MBEDTLS_ERR_NET_INVALID_CONTEXT;
++    }
++
++    ret = recv(net->fd, buf, len, 0);
++    if (ret >= 0) {
++        return (int)ret;
++    }
++
++    err = errno;
++    if (err == EINTR) {
++        return MBEDTLS_ERR_SSL_WANT_READ;
++    }
++
++    if (err == EAGAIN
++#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
++        || err == EWOULDBLOCK
++#endif
++    ) {
++        if (tls->write_nonblocking) {
++            return MBEDTLS_ERR_SSL_WANT_READ;
++        }
++
++        syslog(LOG_WARNING, "[%s] TLS socket receive timeout: errno=%d\n",
++            TAG, err);
++        return MBEDTLS_ERR_SSL_TIMEOUT;
++    }
++
++    if (err == ETIMEDOUT) {
++        syslog(LOG_WARNING, "[%s] TLS socket receive timeout: errno=%d\n",
++            TAG, err);
++        return MBEDTLS_ERR_SSL_TIMEOUT;
++    }
++
++    if (err == EPIPE || err == ECONNRESET || err == ENOTCONN
++#ifdef ENETRESET
++        || err == ENETRESET
++#endif
++    ) {
++        syslog(LOG_WARNING, "[%s] TLS socket connection reset: errno=%d\n",
++            TAG, err);
++        return MBEDTLS_ERR_NET_CONN_RESET;
++    }
++
++    syslog(LOG_ERR, "[%s] TLS socket receive failed: errno=%d (%s)\n",
++        TAG, err, strerror(err));
++    return MBEDTLS_ERR_NET_RECV_FAILED;
++}
++
++static int vela_tls_net_send(void* context, const unsigned char* buf,
++    size_t len)
++{
++    tls_ctx_t* tls = context;
++    mbedtls_net_context* net = tls ? &tls->net : NULL;
++    ssize_t ret;
++    int err;
++    bool complete_record;
++    bool buffer_flight;
++    bool flush_flight;
++
++    if (!net || net->fd < 0) {
++        return MBEDTLS_ERR_NET_INVALID_CONTEXT;
++    }
++
++    complete_record = len >= 5
++        && ((((size_t)buf[3] << 8) | buf[4]) + 5) == len;
++    buffer_flight = complete_record
++        && ((buf[0] == 0x16 && len > 5 && buf[5] != 0x01
++                && !tls->tx_ccs_sent)
++            || buf[0] == 0x14);
++    flush_flight = complete_record && buf[0] == 0x16
++        && tls->tx_ccs_sent;
++
++    /* NuttX buffered TCP can poll and transmit the first small handshake
++     * record before the following records are coalesced.  Keep the complete
++     * post-ServerHello client flight in this BIO until Finished, then submit
++     * ClientKeyExchange + CCS + Finished with one send().
++     */
++
++    if (buffer_flight || flush_flight) {
++        size_t flight_len;
++
++        if (tls->tx_flight_len + len > sizeof(tls->tx_flight)) {
++            syslog(LOG_ERR,
++                "[%s] TLS client flight overflow: buffered=%zu add=%zu\n",
++                TAG, tls->tx_flight_len, len);
++            shutdown(net->fd, SHUT_RDWR);
++            tls->tx_flight_len = 0;
++            tls->tx_ccs_sent = false;
++            return (int)len;
++        }
++
++        memcpy(tls->tx_flight + tls->tx_flight_len, buf, len);
++        tls->tx_flight_len += len;
++
++        if (!flush_flight) {
++            if (buf[0] == 0x14) {
++                tls->tx_ccs_sent = true;
++            }
++
++            return (int)len;
++        }
++
++        flight_len = tls->tx_flight_len;
++        tls->tx_flight_len = 0;
++        tls->tx_ccs_sent = false;
++
++        for (size_t sent = 0; sent < flight_len; ) {
++            ret = send(net->fd, tls->tx_flight + sent,
++                flight_len - sent, 0);
++            if (ret > 0) {
++                sent += (size_t)ret;
++                continue;
++            }
++
++            if (ret < 0 && errno == EINTR) {
++                continue;
++            }
++
++            err = ret < 0 ? errno : EPIPE;
++            syslog(LOG_WARNING,
++                "[%s] TLS client flight send failed: fd=%d sent=%zu/%zu "
++                "errno=%d (%s); closing connection\n",
++                TAG, net->fd, sent, flight_len, err, strerror(err));
++            shutdown(net->fd, SHUT_RDWR);
++            return (int)len;
++        }
++
++        return (int)len;
++    }
++
++    ret = send(net->fd, buf, len, 0);
++    if (ret >= 0) {
++        return (int)ret;
++    }
++
++    err = errno;
++    if (err == EINTR) {
++        return MBEDTLS_ERR_SSL_WANT_WRITE;
++    }
++
++    if (err == EAGAIN
++#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
++        || err == EWOULDBLOCK
++#endif
++    ) {
++        if (tls->write_nonblocking) {
++            return MBEDTLS_ERR_SSL_WANT_WRITE;
++        }
++
++        syslog(LOG_WARNING, "[%s] TLS socket send timeout: errno=%d\n",
++            TAG, err);
++        return MBEDTLS_ERR_NET_SEND_FAILED;
++    }
++
++    if (err == ETIMEDOUT) {
++        syslog(LOG_WARNING, "[%s] TLS socket send timeout: errno=%d\n",
++            TAG, err);
++        return MBEDTLS_ERR_NET_SEND_FAILED;
++    }
++
++    if (err == EPIPE || err == ECONNRESET || err == ENOTCONN
++#ifdef ENETRESET
++        || err == ENETRESET
++#endif
++    ) {
++        syslog(LOG_WARNING, "[%s] TLS socket connection reset: errno=%d\n",
++            TAG, err);
++        return MBEDTLS_ERR_NET_CONN_RESET;
++    }
++
++    syslog(LOG_ERR, "[%s] TLS socket send failed: errno=%d (%s)\n",
++        TAG, err, strerror(err));
++    return MBEDTLS_ERR_NET_SEND_FAILED;
++}
++
+ /* ── Chunked transfer decoding ───────────────────────────────── */
+ 
+ /**
+@@ -114,13 +312,6 @@ static size_t decode_chunked(char* buf, size_t len)
+ 
+ /* ── TLS context ─────────────────────────────────────────────── */
+ 
+-typedef struct {
+-    mbedtls_ssl_context ssl;
+-    mbedtls_ssl_config cfg;
+-    mbedtls_net_context net;
+-    mbedtls_ctr_drbg_context ctr_drbg;
+-} tls_ctx_t;
+-
+ static void tls_ctx_free(tls_ctx_t* ctx)
+ {
+     mbedtls_ssl_close_notify(&ctx->ssl);
+@@ -233,6 +424,10 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+ {
+     int ret;
+ 
++    ctx->tx_flight_len = 0;
++    ctx->tx_ccs_sent = false;
++    ctx->write_nonblocking = false;
++
+     mbedtls_ssl_init(&ctx->ssl);
+     mbedtls_ssl_config_init(&ctx->cfg);
+     mbedtls_net_init(&ctx->net);
+@@ -253,8 +448,11 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+     syslog(LOG_DEBUG, "[%s] Handshake start: Host=%s, UNIX=%ld\n", TAG, host, (long)now);
+ 
+     if (now < 1704067200) { /* Jan 1 2024 */
+-        syslog(LOG_WARNING, "[%s] Clock too old, forcing to 2026\n", TAG);
+-        struct timespec ts = { .tv_sec = 1772275200, .tv_nsec = 0 };
++        /* Temporary certificate-validation baseline until SNTP is wired in.
++         * Keep it inside the current MiMo certificate validity window. */
++        syslog(LOG_WARNING,
++            "[%s] Clock too old, forcing baseline to 2026-08-31\n", TAG);
++        struct timespec ts = { .tv_sec = 1788134400, .tv_nsec = 0 };
+         clock_settime(CLOCK_REALTIME, &ts);
+     }
+ 
+@@ -295,24 +493,35 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+      * Timeout is configured via AGENT_LLM_SOCKET_TIMEOUT_SEC in
+      * agent_config.h.  LLM APIs (especially kimi with thinking mode)
+      * can take over 60s for long responses. */
+-    mbedtls_net_set_block(&ctx->net);
++    if (mbedtls_net_set_block(&ctx->net) != 0) {
++        syslog(LOG_ERR, "[%s] Failed to set TLS socket blocking mode\n", TAG);
++        return VELA_TLS_ERR_CONNECT;
++    }
++
+     if (ctx->net.fd >= 0) {
+ #ifdef CONFIG_AI_AGENT_NET_RPMSG
+         int read_timeout_sec = network_get_read_timeout();
+-        struct timeval tv = { .tv_sec = read_timeout_sec, .tv_usec = 0 };
++        int send_timeout_sec = network_get_connect_timeout();
+ #else
+-        struct timeval tv = { .tv_sec = AGENT_LLM_SOCKET_TIMEOUT_SEC,
+-            .tv_usec = 0 };
++        int read_timeout_sec = AGENT_LLM_SOCKET_TIMEOUT_SEC;
++        int send_timeout_sec = AGENT_LLM_SOCKET_TIMEOUT_SEC;
+ #endif
+-        setsockopt(ctx->net.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++        struct timeval rtv = { .tv_sec = read_timeout_sec, .tv_usec = 0 };
++        struct timeval stv = { .tv_sec = send_timeout_sec, .tv_usec = 0 };
+ 
+-#ifdef CONFIG_AI_AGENT_NET_RPMSG
+-        {
+-            int timeout_sec = network_get_connect_timeout();
+-            struct timeval ctv = { .tv_sec = timeout_sec, .tv_usec = 0 };
+-            setsockopt(ctx->net.fd, SOL_SOCKET, SO_SNDTIMEO, &ctv, sizeof(ctv));
++        if (setsockopt(ctx->net.fd, SOL_SOCKET, SO_RCVTIMEO,
++                &rtv, sizeof(rtv)) < 0) {
++            syslog(LOG_ERR, "[%s] Set TLS receive timeout failed: %d\n",
++                TAG, errno);
++            return VELA_TLS_ERR_CONNECT;
++        }
++
++        if (setsockopt(ctx->net.fd, SOL_SOCKET, SO_SNDTIMEO,
++                &stv, sizeof(stv)) < 0) {
++            syslog(LOG_ERR, "[%s] Set TLS send timeout failed: %d\n",
++                TAG, errno);
++            return VELA_TLS_ERR_CONNECT;
+         }
+-#endif
+     }
+ 
+     /* SSL config: client, TLS, default ciphersuites */
+@@ -325,6 +534,35 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+         return VELA_TLS_ERR_HANDSHAKE;
+     }
+ 
++    /* Both MiMo and the control endpoint prefer X25519, but the current
++     * ESP32-S3/mbedTLS path reaches Client Finished and is then rejected.
++     * Force the widely-supported P-256 ECDHE group to avoid that target-
++     * specific X25519 shared-secret path. */
++    {
++        static const uint16_t tls_groups[] = {
++            MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
++            MBEDTLS_SSL_IANA_TLS_GROUP_NONE
++        };
++
++        mbedtls_ssl_conf_groups(&ctx->cfg, tls_groups);
++        syslog(LOG_INFO, "[%s] Using TLS group secp256r1\n", TAG);
++    }
++
++    /* MiMo's TLS 1.2 endpoint negotiates ECDHE-RSA with CHACHA20 and
++     * accepts AES-GCM as a fallback.  Advertising only these modern suites
++     * keeps the ClientHello small on the ESP32-S3/NuttX TCP path. */
++    if (strcmp(host, "api.xiaomimimo.com") == 0) {
++        static const int mimo_ciphersuites[] = {
++            MBEDTLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
++            MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
++            MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
++            0
++        };
++
++        mbedtls_ssl_conf_ciphersuites(&ctx->cfg, mimo_ciphersuites);
++        syslog(LOG_INFO, "[%s] Using compact MiMo TLS 1.2 profile\n", TAG);
++    }
++
+     /* Pin the TLS version range to what is actually compiled in.
+      * Setting max to MBEDTLS_SSL_VERSION_TLS1_3 when MBEDTLS_SSL_PROTO_TLS1_3
+      * is not defined causes mbedtls_ssl_setup() to return BAD_CONFIG (-0x5e80).
+@@ -367,10 +605,11 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+         return VELA_TLS_ERR_HANDSHAKE;
+     }
+ 
+-    /* Use blocking recv — no select()/poll().  The read
+-     * timeout is enforced by the SO_RCVTIMEO socket option set above. */
+-    mbedtls_ssl_set_bio(&ctx->ssl, &ctx->net,
+-        mbedtls_net_send, mbedtls_net_recv, NULL);
++    /* Use local BIO wrappers so blocking socket timeouts and resets retain
++     * their real errno instead of collapsing into an opaque -0x004c.
++     */
++    mbedtls_ssl_set_bio(&ctx->ssl, ctx,
++        vela_tls_net_send, vela_tls_net_recv, NULL);
+ 
+     /* Handshake */
+     while ((ret = mbedtls_ssl_handshake(&ctx->ssl)) != 0) {
+@@ -382,6 +621,9 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+ #else
+             syslog(LOG_ERR, "[%s] ssl_handshake ret=-0x%04x\n", TAG, -ret);
+ #endif
++            syslog(LOG_ERR, "[%s] Handshake stopped at %s / %s\n",
++                TAG, mbedtls_ssl_get_version(&ctx->ssl),
++                mbedtls_ssl_get_ciphersuite(&ctx->ssl));
+             /* Log if it was a fatal alert */
+             if (ret == MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE) {
+                 syslog(LOG_ERR, "[%s] Server sent fatal alert message\n", TAG);
+@@ -398,12 +640,113 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
+ 
+ /* ── HTTP/1.1 framing ────────────────────────────────────────── */
+ 
++#define VELA_TLS_WRITE_RETRY_US 10000
++#define VELA_TLS_WRITE_PACE_US 5000
++#define VELA_TLS_WRITE_CHUNK_SIZE 4096
++#define VELA_TLS_WRITE_TIMEOUT_MS \
++    ((int64_t)AGENT_LLM_SOCKET_TIMEOUT_SEC * 1000)
++
++static int64_t tls_monotonic_ms(void)
++{
++    struct timespec now;
++
++    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
++        return -1;
++    }
++
++    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
++}
++
++static int tls_write_all_until(tls_ctx_t* ctx, const unsigned char* data,
++    size_t len, int64_t deadline_ms)
++{
++    size_t written = 0;
++
++    while (written < len) {
++        size_t chunk = len - written;
++        int ret;
++
++        if (chunk > VELA_TLS_WRITE_CHUNK_SIZE) {
++            chunk = VELA_TLS_WRITE_CHUNK_SIZE;
++        }
++
++        ret = mbedtls_ssl_write(&ctx->ssl, data + written, chunk);
++
++        if (ret > 0) {
++            written += (size_t)ret;
++
++            /* Avoid filling the buffered TCP and Wi-Fi queues in a burst.
++             * The ESP32-S3 vendor driver has only a small static TX credit
++             * pool; pacing also lets ACK processing release write buffers.
++             */
++
++            usleep(VELA_TLS_WRITE_PACE_US);
++            continue;
++        }
++
++        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE
++            || ret == MBEDTLS_ERR_SSL_WANT_READ) {
++            int64_t now_ms = tls_monotonic_ms();
++
++            if (now_ms < 0 || now_ms >= deadline_ms) {
++                syslog(LOG_ERR,
++                    "[%s] TLS request upload timed out at %zu/%zu bytes\n",
++                    TAG, written, len);
++                shutdown(ctx->net.fd, SHUT_RDWR);
++                return VELA_TLS_ERR_WRITE;
++            }
++
++            usleep(VELA_TLS_WRITE_RETRY_US);
++            continue;
++        }
++
++        return VELA_TLS_ERR_WRITE;
++    }
++
++    return 0;
++}
++
++static bool http_text_valid(FAR const char *text, bool header_name)
++{
++    FAR const unsigned char *cursor = (FAR const unsigned char *)text;
++
++    if (!text || !text[0]) {
++        return false;
++    }
++
++    while (*cursor) {
++        if (*cursor < 0x20 || *cursor == 0x7f ||
++            (header_name && (*cursor == ':' || *cursor == ' ' ||
++                             *cursor == '\t'))) {
++            return false;
++        }
++        cursor++;
++    }
++
++    return true;
++}
++
+ static int tls_write_request(tls_ctx_t* ctx,
+     const char* method, const char* host,
+     const char* path,
+     const vela_header_t* headers,
+     const char* body, size_t body_len)
+ {
++    const vela_header_t* entry;
++
++    if (!ctx || !http_text_valid(method, true) ||
++        !http_text_valid(host, false) || !http_text_valid(path, false) ||
++        (!body && body_len != 0)) {
++        return VELA_TLS_ERR_WRITE;
++    }
++
++    for (entry = headers; entry && entry->name; entry++) {
++        if (!http_text_valid(entry->name, true) ||
++            !http_text_valid(entry->value, false)) {
++            return VELA_TLS_ERR_WRITE;
++        }
++    }
++
+     /* Heap-allocate header buffer to reduce stack pressure.
+      * This function is called from threads with limited stack
+      * (outbound dispatch 16KB) and the TLS context already
+@@ -414,6 +757,8 @@ static int tls_write_request(tls_ctx_t* ctx,
+ 
+     int pos = 0;
+     int ret;
++    int64_t now_ms;
++    int64_t deadline_ms;
+ 
+ #define HDR_APPEND(fmt, ...)                                    \
+     pos += snprintf(hdr + pos, 4096 - pos, fmt, ##__VA_ARGS__); \
+@@ -440,43 +785,31 @@ static int tls_write_request(tls_ctx_t* ctx,
+     HDR_APPEND("\r\n");
+ #undef HDR_APPEND
+ 
+-    /* Write headers */
+-    int written = 0;
+-    while (written < pos) {
+-        ret = mbedtls_ssl_write(&ctx->ssl,
+-            (const unsigned char*)(hdr + written),
+-            (size_t)(pos - written));
+-        if (ret > 0) {
+-            written += ret;
+-        } else if (ret == 0) {
+-            free(hdr);
+-            return VELA_TLS_ERR_WRITE;
+-        } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+-            free(hdr);
+-            return VELA_TLS_ERR_WRITE;
+-        }
++    now_ms = tls_monotonic_ms();
++    if (now_ms < 0 || mbedtls_net_set_nonblock(&ctx->net) != 0) {
++        free(hdr);
++        return VELA_TLS_ERR_WRITE;
+     }
+ 
++    deadline_ms = now_ms + VELA_TLS_WRITE_TIMEOUT_MS;
++    ctx->write_nonblocking = true;
++
++    ret = tls_write_all_until(ctx, (const unsigned char*)hdr,
++        (size_t)pos, deadline_ms);
+     free(hdr);
+ 
+-    /* Write body */
+-    if (body && body_len > 0) {
+-        size_t bw = 0;
+-        while (bw < body_len) {
+-            ret = mbedtls_ssl_write(&ctx->ssl,
+-                (const unsigned char*)(body + bw),
+-                body_len - bw);
+-            if (ret > 0) {
+-                bw += (size_t)ret;
+-            } else if (ret == 0) {
+-                return VELA_TLS_ERR_WRITE;
+-            } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+-                return VELA_TLS_ERR_WRITE;
+-            }
+-        }
++    if (ret == 0 && body && body_len > 0) {
++        ret = tls_write_all_until(ctx, (const unsigned char*)body,
++            body_len, deadline_ms);
+     }
+ 
+-    return 0;
++    ctx->write_nonblocking = false;
++    if (mbedtls_net_set_block(&ctx->net) != 0) {
++        shutdown(ctx->net.fd, SHUT_RDWR);
++        ret = VELA_TLS_ERR_WRITE;
++    }
++
++    return ret;
+ }
+ 
+ /**
+@@ -643,6 +976,93 @@ static int tls_read_response(tls_ctx_t* ctx, char* resp_buf, size_t resp_cap,
+ 
+ /* ── Public API ──────────────────────────────────────────────── */
+ 
++static int tls_hex_nibble(char value)
++{
++    if (value >= '0' && value <= '9')
++        return value - '0';
++    if (value >= 'a' && value <= 'f')
++        return value - 'a' + 10;
++    if (value >= 'A' && value <= 'F')
++        return value - 'A' + 10;
++    return -1;
++}
++
++static int tls_verify_certificate_pin(tls_ctx_t* ctx,
++    const char* cert_sha256_hex)
++{
++    const mbedtls_x509_crt* peer;
++    unsigned char expected[32];
++    unsigned char actual[32];
++    unsigned char difference = 0;
++    int high;
++    int low;
++
++    if (!cert_sha256_hex || strlen(cert_sha256_hex) != 64)
++        return VELA_TLS_ERR_VERIFY;
++
++    for (size_t i = 0; i < sizeof(expected); i++) {
++        high = tls_hex_nibble(cert_sha256_hex[i * 2]);
++        low = tls_hex_nibble(cert_sha256_hex[i * 2 + 1]);
++        if (high < 0 || low < 0)
++            return VELA_TLS_ERR_VERIFY;
++        expected[i] = (unsigned char)((high << 4) | low);
++    }
++
++    peer = mbedtls_ssl_get_peer_cert(&ctx->ssl);
++    if (!peer || !peer->raw.p || peer->raw.len == 0)
++        return VELA_TLS_ERR_VERIFY;
++
++    if (mbedtls_sha256(peer->raw.p, peer->raw.len, actual, 0) != 0)
++        return VELA_TLS_ERR_VERIFY;
++
++    for (size_t i = 0; i < sizeof(expected); i++)
++        difference |= expected[i] ^ actual[i];
++
++    if (difference != 0) {
++        syslog(LOG_ERR, "[%s] Peer certificate SHA-256 pin mismatch\n", TAG);
++        return VELA_TLS_ERR_VERIFY;
++    }
++
++    return 0;
++}
++
++int vela_https_request_pinned(
++    const char* host,
++    const char* port,
++    const char* method,
++    const char* path,
++    const vela_header_t* headers,
++    const char* body,
++    size_t body_len,
++    const char* cert_sha256_hex,
++    char* resp_buf,
++    size_t resp_cap,
++    size_t* out_body_len)
++{
++    tls_ctx_t ctx;
++    int ret;
++
++    if ((ret = tls_ctx_connect(&ctx, host, port)) != 0) {
++        tls_ctx_free(&ctx);
++        return ret;
++    }
++
++    if ((ret = tls_verify_certificate_pin(&ctx, cert_sha256_hex)) != 0) {
++        tls_ctx_free(&ctx);
++        return ret;
++    }
++
++    if ((ret = tls_write_request(&ctx, method, host, path,
++             headers, body, body_len)) != 0) {
++        tls_ctx_free(&ctx);
++        return ret;
++    }
++
++    ret = tls_read_response(&ctx, resp_buf, resp_cap, out_body_len, NULL);
++    tls_ctx_free(&ctx);
++    return ret;
++}
++
+ int vela_https_request(
+     const char* host,
+     const char* port,
+@@ -829,6 +1249,224 @@ int vela_https_head_date(const char* host, const char* port, const char* path,
+     return 0;
+ }
+ 
++/* ── Plain HTTP (no TLS) ──────────────────────────────────── */
++
++static int http_write_all(int fd, FAR const void *buffer, size_t length)
++{
++    FAR const uint8_t *cursor = buffer;
++
++    while (length > 0) {
++        ssize_t written = send(fd, cursor, length, 0);
++        if (written < 0 && errno == EINTR) {
++            continue;
++        }
++        if (written <= 0) {
++            return VELA_TLS_ERR_WRITE;
++        }
++        cursor += written;
++        length -= (size_t)written;
++    }
++
++    return 0;
++}
++
++int vela_http_request(const char* host, const char* port,
++    const char* method, const char* path,
++    const vela_header_t* headers,
++    const char* body, size_t body_len,
++    char* resp_buf, size_t resp_cap, size_t* out_body_len)
++{
++    struct addrinfo hints;
++    struct addrinfo* addresses = NULL;
++    struct addrinfo* address;
++    struct timeval timeout;
++    char header[VELA_TLS_HDR_BUF];
++    char* raw = NULL;
++    char* body_start;
++    size_t raw_len = 0;
++    size_t response_len = 0;
++    long content_length = -1;
++    int chunked = 0;
++    int fd = -1;
++    int position = 0;
++    int status = VELA_TLS_ERR_CONNECT;
++    int gai;
++
++    if (!host || !host[0] || !port || !port[0] || !method || !method[0] ||
++        !path || path[0] != '/' || (!body && body_len != 0) ||
++        !resp_buf || resp_cap == 0) {
++        return VELA_TLS_ERR_WRITE;
++    }
++
++    resp_buf[0] = '\0';
++    if (out_body_len) {
++        *out_body_len = 0;
++    }
++
++    memset(&hints, 0, sizeof(hints));
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_STREAM;
++    gai = getaddrinfo(host, port, &hints, &addresses);
++    if (gai != 0 || !addresses) {
++        syslog(LOG_INFO, "http: endpoint lookup failed: %d", gai);
++        return VELA_TLS_ERR_CONNECT;
++    }
++
++    timeout.tv_sec = AGENT_LLM_SOCKET_TIMEOUT_SEC;
++    timeout.tv_usec = 0;
++    for (address = addresses; address; address = address->ai_next) {
++        fd = socket(address->ai_family, address->ai_socktype,
++            address->ai_protocol);
++        if (fd < 0) {
++            continue;
++        }
++        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
++        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
++        if (connect(fd, address->ai_addr, address->ai_addrlen) == 0) {
++            break;
++        }
++        close(fd);
++        fd = -1;
++    }
++    freeaddrinfo(addresses);
++    if (fd < 0) {
++        return VELA_TLS_ERR_CONNECT;
++    }
++
++#define HTTP_APPEND(...) do {                                                \
++    int added = snprintf(header + position, sizeof(header) - position,        \
++        __VA_ARGS__);                                                         \
++    if (added < 0 || (size_t)added >= sizeof(header) - (size_t)position) {    \
++        status = VELA_TLS_ERR_OVERFLOW;                                       \
++        goto out;                                                             \
++    }                                                                         \
++    position += added;                                                        \
++} while (0)
++
++    HTTP_APPEND("%s %s HTTP/1.1\r\n", method, path);
++    if (strcmp(port, "80") == 0) {
++        HTTP_APPEND("Host: %s\r\n", host);
++    } else {
++        HTTP_APPEND("Host: %s:%s\r\n", host, port);
++    }
++    HTTP_APPEND("Connection: close\r\n");
++    HTTP_APPEND("User-Agent: openvela-aivlog/1.0\r\n");
++    HTTP_APPEND("Content-Length: %zu\r\n", body_len);
++    if (headers) {
++        FAR const vela_header_t* entry;
++        for (entry = headers; entry->name; entry++) {
++            if (!entry->value || strchr(entry->name, '\r') ||
++                strchr(entry->name, '\n') || strchr(entry->value, '\r') ||
++                strchr(entry->value, '\n')) {
++                status = VELA_TLS_ERR_WRITE;
++                goto out;
++            }
++            HTTP_APPEND("%s: %s\r\n", entry->name, entry->value);
++        }
++    }
++    HTTP_APPEND("\r\n");
++#undef HTTP_APPEND
++
++    status = http_write_all(fd, header, (size_t)position);
++    if (status != 0) {
++        goto out;
++    }
++    if (body_len > 0) {
++        status = http_write_all(fd, body, body_len);
++        if (status != 0) {
++            goto out;
++        }
++    }
++
++    raw = malloc(TLS_RAW_BUF_SIZE);
++    if (!raw) {
++        status = VELA_TLS_ERR_READ;
++        goto out;
++    }
++
++    body_start = NULL;
++    while (raw_len < TLS_RAW_BUF_SIZE - 1) {
++        ssize_t count = recv(fd, raw + raw_len,
++            TLS_RAW_BUF_SIZE - 1 - raw_len, 0);
++        if (count < 0 && errno == EINTR) {
++            continue;
++        }
++        if (count <= 0) {
++            break;
++        }
++        raw_len += (size_t)count;
++        raw[raw_len] = '\0';
++        body_start = memmem(raw, raw_len, "\r\n\r\n", 4);
++        if (body_start) {
++            break;
++        }
++    }
++    raw[raw_len] = '\0';
++    if (!body_start) {
++        status = raw_len == TLS_RAW_BUF_SIZE - 1 ?
++            VELA_TLS_ERR_OVERFLOW : VELA_TLS_ERR_READ;
++        goto out;
++    }
++    if (sscanf(raw, "HTTP/1.%*d %d", &status) != 1 || status < 100 ||
++        status > 599) {
++        status = VELA_TLS_ERR_READ;
++        goto out;
++    }
++
++    body_start += 4;
++    {
++        char* value = strcasestr(raw, "Content-Length:");
++        if (value && value < body_start) {
++            content_length = strtol(value + strlen("Content-Length:"),
++                NULL, 10);
++            if (content_length < 0 || content_length > 10 * 1024 * 1024) {
++                content_length = -1;
++            }
++        }
++    }
++    {
++        char* value = strcasestr(raw, "Transfer-Encoding:");
++        if (value && value < body_start) {
++            chunked = strcasestr(value, "chunked") != NULL;
++        }
++    }
++
++    {
++        size_t initial = (size_t)(raw + raw_len - body_start);
++        size_t copy = initial < resp_cap - 1 ? initial : resp_cap - 1;
++        memcpy(resp_buf, body_start, copy);
++        response_len = copy;
++    }
++
++    while (response_len < resp_cap - 1 &&
++        (content_length < 0 || (long)response_len < content_length)) {
++        ssize_t count = recv(fd, resp_buf + response_len,
++            resp_cap - 1 - response_len, 0);
++        if (count < 0 && errno == EINTR) {
++            continue;
++        }
++        if (count <= 0) {
++            break;
++        }
++        response_len += (size_t)count;
++    }
++    resp_buf[response_len] = '\0';
++    if (chunked) {
++        response_len = decode_chunked(resp_buf, response_len);
++        resp_buf[response_len] = '\0';
++    }
++    if (out_body_len) {
++        *out_body_len = response_len;
++    }
++
++out:
++    free(raw);
++    if (fd >= 0) {
++        close(fd);
++    }
++    return status;
++}
++
+ /* ── Plain HTTP (no TLS) POST ─────────────────────────────── */
+ 
+ int vela_http_post_json(const char* host, const char* port, const char* path,
+diff --git a/src/infra/vela_tls.h b/src/infra/vela_tls.h
+index 8e52bf6..4ec9e03 100644
+--- a/src/infra/vela_tls.h
++++ b/src/infra/vela_tls.h
+@@ -32,6 +32,7 @@ extern "C" {
+ #define VELA_TLS_ERR_WRITE     -3
+ #define VELA_TLS_ERR_READ      -4
+ #define VELA_TLS_ERR_OVERFLOW  -5
++#define VELA_TLS_ERR_VERIFY    -6
+ 
+ /**
+  * Extra header entry; pass an array terminated by {NULL, NULL}.
+@@ -72,6 +73,25 @@ int vela_https_request(
+     size_t           *out_body_len  /* optional: actual body bytes written, or NULL */
+ );
+ 
++/**
++ * Perform an HTTPS request on an ephemeral connection and require the
++ * peer leaf certificate DER SHA-256 to match cert_sha256_hex exactly.
++ * The pin must contain 64 hexadecimal characters.
++ */
++int vela_https_request_pinned(
++    const char       *host,
++    const char       *port,
++    const char       *method,
++    const char       *path,
++    const vela_header_t *headers,
++    const char       *body,
++    size_t            body_len,
++    const char       *cert_sha256_hex,
++    char             *resp_buf,
++    size_t            resp_cap,
++    size_t           *out_body_len
++);
++
+ /**
+  * Convenience wrapper for GET with no extra headers or body.
+  */
+@@ -86,6 +106,23 @@ int vela_https_post_json(const char *host, const char *port, const char *path,
+                          const char *json_body,
+                          char *resp_buf, size_t resp_cap);
+ 
++/**
++ * Perform a complete plain HTTP request. Supports arbitrary methods,
++ * headers, and binary request bodies. Intended only for trusted LANs.
++ */
++int vela_http_request(
++    const char       *host,
++    const char       *port,
++    const char       *method,
++    const char       *path,
++    const vela_header_t *headers,
++    const char       *body,
++    size_t            body_len,
++    char             *resp_buf,
++    size_t            resp_cap,
++    size_t           *out_body_len
++);
++
+ /**
+  * Plain HTTP (no TLS) POST with Content-Type: application/json.
+  * Used for internal/intranet endpoints that don't support HTTPS.
+diff --git a/src/llm/llm_internal.h b/src/llm/llm_internal.h
+index fb82203..df04350 100644
+--- a/src/llm/llm_internal.h
++++ b/src/llm/llm_internal.h
+@@ -51,6 +51,14 @@ void resp_buf_free(resp_buf_t* rb);
+ 
+ /* ── HTTP call (routes through direct or proxy path) ──────── */
+ 
++/* Route one request through an explicit backend configuration.  Vision
++ * calls use this so an independent vision host/key cannot accidentally be
++ * sent to the main text-model endpoint. */
++int llm_http_call_with_config(const char* post_data,
++    const char* host, const char* path, const char* port,
++    const char* api_key, const char* model,
++    resp_buf_t* rb, int* out_status);
++
+ int llm_http_call(const char* post_data, resp_buf_t* rb,
+     int* out_status);
+ 
+diff --git a/src/llm/llm_proxy.c b/src/llm/llm_proxy.c
+index 48157cc..c05b35d 100644
+--- a/src/llm/llm_proxy.c
++++ b/src/llm/llm_proxy.c
+@@ -26,14 +26,11 @@
+ #include "core/message_bus.h"
+ #include "infra/config_store.h"
+ #include "infra/http_proxy.h"
++#include "infra/network_manager.h"
+ #include "infra/vela_tls.h"
+ #include "agent_compat.h"
+ #include "agent_config.h"
+ 
+-#ifdef CONFIG_AI_AGENT_NET_RPMSG
+-#include "network/network_manager.h"
+-#endif
+-
+ #include "cJSON.h"
+ #include <stdlib.h>
+ #include <string.h>
+@@ -58,7 +55,8 @@ bool is_openai_compat_host(const char* host)
+ {
+     return strstr(host, "openai.com")
+         || strstr(host, "openrouter.ai")
+-        || strstr(host, "xiaomimimo.com");
++        || strstr(host, "xiaomimimo.com")
++        || strstr(host, "mioffice.cn");
+ }
+ 
+ 
+@@ -107,6 +105,8 @@ void resp_buf_free(resp_buf_t* rb)
+ 
+ int llm_proxy_init(void)
+ {
++    pthread_mutex_lock(&s_llm_lock);
++
+     if (AGENT_SECRET_API_KEY[0])
+         strncpy(s_api_key, AGENT_SECRET_API_KEY, sizeof(s_api_key) - 1);
+     if (AGENT_SECRET_MODEL[0])
+@@ -145,6 +145,8 @@ int llm_proxy_init(void)
+             s_model, s_llm_host);
+     else
+         syslog(LOG_WARNING, "[%s] No API key. Use CLI: set_llm <preset> <key>\n", TAG);
++
++    pthread_mutex_unlock(&s_llm_lock);
+     return OK;
+ }
+ 
+@@ -263,32 +265,40 @@ void llm_snapshot_vision_config(char* model, size_t model_sz,
+ int llm_set_vision_model(const char* host, const char* model,
+     const char* api_key)
+ {
++    int ret = OK;
++
+     pthread_mutex_lock(&s_llm_lock);
+ 
+     if (host && host[0]) {
+-        claw_config_set(AGENT_CFG_KEY_VISION_HOST, host);
++        if (claw_config_set(AGENT_CFG_KEY_VISION_HOST, host) < 0)
++            ret = ERROR;
+         strncpy(s_vision_host, host, sizeof(s_vision_host) - 1);
+         s_vision_host[sizeof(s_vision_host) - 1] = '\0';
+     } else {
+-        claw_config_set(AGENT_CFG_KEY_VISION_HOST, "");
++        if (claw_config_set(AGENT_CFG_KEY_VISION_HOST, "") < 0)
++            ret = ERROR;
+         s_vision_host[0] = '\0';
+     }
+ 
+     if (model && model[0]) {
+-        claw_config_set(AGENT_CFG_KEY_VISION_MODEL, model);
++        if (claw_config_set(AGENT_CFG_KEY_VISION_MODEL, model) < 0)
++            ret = ERROR;
+         strncpy(s_vision_model, model, sizeof(s_vision_model) - 1);
+         s_vision_model[sizeof(s_vision_model) - 1] = '\0';
+     } else {
+-        claw_config_set(AGENT_CFG_KEY_VISION_MODEL, "");
++        if (claw_config_set(AGENT_CFG_KEY_VISION_MODEL, "") < 0)
++            ret = ERROR;
+         s_vision_model[0] = '\0';
+     }
+ 
+     if (api_key && api_key[0]) {
+-        claw_config_set(AGENT_CFG_KEY_VISION_API_KEY, api_key);
++        if (claw_config_set(AGENT_CFG_KEY_VISION_API_KEY, api_key) < 0)
++            ret = ERROR;
+         strncpy(s_vision_api_key, api_key, sizeof(s_vision_api_key) - 1);
+         s_vision_api_key[sizeof(s_vision_api_key) - 1] = '\0';
+     } else {
+-        claw_config_set(AGENT_CFG_KEY_VISION_API_KEY, "");
++        if (claw_config_set(AGENT_CFG_KEY_VISION_API_KEY, "") < 0)
++            ret = ERROR;
+         s_vision_api_key[0] = '\0';
+     }
+ 
+@@ -297,7 +307,7 @@ int llm_set_vision_model(const char* host, const char* model,
+         s_vision_host[0] ? s_vision_host : "(inherit)");
+ 
+     pthread_mutex_unlock(&s_llm_lock);
+-    return OK;
++    return ret;
+ }
+ 
+ /* ── HTTP helpers ─────────────────────────────────────────── */
+@@ -321,17 +331,11 @@ const char* model_name_for_api(const char* model, const char* host)
+ 
+ /* Direct path via vela_tls */
+ static int llm_http_direct(const char* post_data, resp_buf_t* rb,
+-    int* out_status)
++    int* out_status, const char* api_key, const char* llm_host,
++    const char* llm_path, const char* llm_port, const char* model)
+ {
+-    /* Snapshot config under lock */
+-    char api_key[128], llm_host[128], llm_path[128], llm_port[8], model[64];
+-    pthread_mutex_lock(&s_llm_lock);
+-    memcpy(api_key, s_api_key, sizeof(api_key));
+-    memcpy(llm_host, s_llm_host, sizeof(llm_host));
+-    memcpy(llm_path, s_llm_path, sizeof(llm_path));
+-    memcpy(llm_port, s_llm_port, sizeof(llm_port));
+-    memcpy(model, s_model, sizeof(model));
+-    pthread_mutex_unlock(&s_llm_lock);
++    if (!api_key || !llm_host || !llm_path || !llm_port || !model)
++        return ERROR;
+ 
+     /* Allocate the response buffer once and hand it directly to the
+      * TLS layer.  Previously we allocated a separate raw_buf and then
+@@ -386,17 +390,11 @@ static int llm_http_direct(const char* post_data, resp_buf_t* rb,
+ 
+ /* Proxy path via CONNECT tunnel */
+ static int llm_http_via_proxy(const char* post_data, resp_buf_t* rb,
+-    int* out_status)
++    int* out_status, const char* api_key, const char* llm_host,
++    const char* llm_path, const char* llm_port, const char* model)
+ {
+-    /* Snapshot config under lock */
+-    char api_key[128], llm_host[128], llm_path[128], llm_port[8], model[64];
+-    pthread_mutex_lock(&s_llm_lock);
+-    memcpy(api_key, s_api_key, sizeof(api_key));
+-    memcpy(llm_host, s_llm_host, sizeof(llm_host));
+-    memcpy(llm_path, s_llm_path, sizeof(llm_path));
+-    memcpy(llm_port, s_llm_port, sizeof(llm_port));
+-    memcpy(model, s_model, sizeof(model));
+-    pthread_mutex_unlock(&s_llm_lock);
++    if (!api_key || !llm_host || !llm_path || !llm_port || !model)
++        return ERROR;
+ 
+     int port = atoi(llm_port);
+     if (port <= 0)
+@@ -477,17 +475,16 @@ static int llm_http_via_proxy(const char* post_data, resp_buf_t* rb,
+     return OK;
+ }
+ 
+-int llm_http_call(const char* post_data, resp_buf_t* rb,
+-    int* out_status)
++int llm_http_call_with_config(const char* post_data,
++    const char* host, const char* path, const char* port,
++    const char* api_key, const char* model,
++    resp_buf_t* rb, int* out_status)
+ {
+     /* For plain HTTP endpoints (port != 443), always use direct path.
+      * The proxy does CONNECT + TLS which fails on non-TLS endpoints.
+      * Non-TLS HTTP endpoints (port != 443) are reachable
+      * directly without a proxy anyway. */
+-    int use_tls;
+-    pthread_mutex_lock(&s_llm_lock);
+-    use_tls = (strcmp(s_llm_port, "443") == 0);
+-    pthread_mutex_unlock(&s_llm_lock);
++    int use_tls = port && strcmp(port, "443") == 0;
+ 
+ #ifdef CONFIG_AI_AGENT_NET_RPMSG
+     int retry_max = network_get_retry_max();
+@@ -507,9 +504,11 @@ int llm_http_call(const char* post_data, resp_buf_t* rb,
+         }
+ 
+         if (use_tls && http_proxy_is_enabled()) {
+-            ret = llm_http_via_proxy(post_data, rb, out_status);
++            ret = llm_http_via_proxy(post_data, rb, out_status, api_key, host,
++                path, port, model);
+         } else {
+-            ret = llm_http_direct(post_data, rb, out_status);
++            ret = llm_http_direct(post_data, rb, out_status, api_key, host,
++                path, port, model);
+         }
+ 
+         if (ret == OK) {
+@@ -535,12 +534,87 @@ int llm_http_call(const char* post_data, resp_buf_t* rb,
+     }
+     return ERROR;
+ #else
+-    if (use_tls && http_proxy_is_enabled())
+-        return llm_http_via_proxy(post_data, rb, out_status);
+-    return llm_http_direct(post_data, rb, out_status);
++    int ret = ERROR;
++
++    for (int attempt = 0; attempt <= AGENT_LLM_MAX_RETRIES; attempt++) {
++        if (attempt > 0) {
++            int delay = AGENT_LLM_RETRY_BASE_SEC << (attempt - 1);
++            syslog(LOG_INFO, "[llm] Retry %d/%d after %ds\n",
++                attempt, AGENT_LLM_MAX_RETRIES, delay);
++            sleep(delay);
++
++            /* A failed TLS upload can leave wlan0 with a stale IPv4 address
++             * even though association, DHCP, or DNS is no longer usable.
++             * Reapply the persisted credentials and renew DHCP before every
++             * transport retry instead of trusting the cached address.
++             */
++
++            syslog(LOG_INFO,
++                "[llm] Recovering WiFi before HTTP retry %d\n", attempt);
++            if (network_wifi_reconnect() < 0) {
++                syslog(LOG_WARNING,
++                    "[llm] Network reconnect failed before HTTP attempt %d/%d\n",
++                    attempt + 1, AGENT_LLM_MAX_RETRIES + 1);
++                continue;
++            }
++        } else if (!network_is_connected()) {
++            syslog(LOG_WARNING,
++                "[llm] Network unavailable before HTTP attempt 1; reconnecting\n");
++            if (network_wifi_reconnect() < 0) {
++                syslog(LOG_WARNING,
++                    "[llm] Network reconnect failed before HTTP attempt 1/%d\n",
++                    AGENT_LLM_MAX_RETRIES + 1);
++                continue;
++            }
++        }
++
++        if (out_status) {
++            *out_status = 0;
++        }
++
++        if (use_tls && http_proxy_is_enabled()) {
++            ret = llm_http_via_proxy(post_data, rb, out_status, api_key, host,
++                path, port, model);
++        } else {
++            ret = llm_http_direct(post_data, rb, out_status, api_key, host,
++                path, port, model);
++        }
++
++        if (ret == OK) {
++            return OK;
++        }
++
++        syslog(LOG_WARNING, "[llm] HTTP call failed (attempt %d/%d)\n",
++            attempt + 1, AGENT_LLM_MAX_RETRIES + 1);
++    }
++
++    syslog(LOG_ERR, "[llm] All %d HTTP attempts failed\n",
++        AGENT_LLM_MAX_RETRIES + 1);
++    return ERROR;
+ #endif
+ }
+ 
++int llm_http_call(const char* post_data, resp_buf_t* rb,
++    int* out_status)
++{
++    char api_key[128];
++    char host[128];
++    char path[128];
++    char port[8];
++    char model[64];
++
++    pthread_mutex_lock(&s_llm_lock);
++    memcpy(api_key, s_api_key, sizeof(api_key));
++    memcpy(host, s_llm_host, sizeof(host));
++    memcpy(path, s_llm_path, sizeof(path));
++    memcpy(port, s_llm_port, sizeof(port));
++    memcpy(model, s_model, sizeof(model));
++    pthread_mutex_unlock(&s_llm_lock);
++
++    return llm_http_call_with_config(post_data, host, path, port,
++        api_key, model, rb, out_status);
++}
++
+ /* ── JSON helpers ─────────────────────────────────────────── */
+ 
+ /* Extract text from OpenAI response format: choices[0].message.content */
+diff --git a/src/llm/llm_vision.c b/src/llm/llm_vision.c
+index 549a15b..f3e298c 100644
+--- a/src/llm/llm_vision.c
++++ b/src/llm/llm_vision.c
+@@ -36,6 +36,22 @@
+ 
+ static const char* TAG = "llm_vision";
+ 
++static bool is_mimo_request(const char* host, const char* model)
++{
++    if (host && strstr(host, "xiaomimimo.com") != NULL)
++        return true;
++
++    return model && strncmp(model, "xiaomi/mimo-", 12) == 0;
++}
++
++static const char* vision_api_path(const char* host)
++{
++    if (host && strstr(host, "dashscope.aliyuncs.com"))
++        return AGENT_LLM_QWEN_PATH;
++
++    return "/v1/chat/completions";
++}
++
+ /* ── Public: vision chat (text + image) ───────────────────── */
+ 
+ int llm_chat_vision(const char* prompt, const char* image_b64,
+@@ -118,6 +134,19 @@ int llm_chat_vision(const char* prompt, const char* image_b64,
+     else
+         cJSON_AddNumberToObject(body, "max_tokens", AGENT_VISION_MAX_TOKENS);
+ 
++    if (is_mimo_request(llm_host, model)) {
++        cJSON* thinking = cJSON_CreateObject();
++        if (!thinking) {
++            cJSON_Delete(messages);
++            cJSON_Delete(body);
++            snprintf(response_buf, buf_size,
++                "Error: OOM building MiMo options");
++            return ERROR;
++        }
++        cJSON_AddStringToObject(thinking, "type", "disabled");
++        cJSON_AddItemToObject(body, "thinking", thinking);
++    }
++
+     cJSON_AddItemToObject(body, "messages", messages);
+ 
+     char* post_data = cJSON_PrintUnformatted(body);
+@@ -132,7 +161,8 @@ int llm_chat_vision(const char* prompt, const char* image_b64,
+ 
+     resp_buf_t rb = { 0 };
+     int status = 0;
+-    int err = llm_http_call(post_data, &rb, &status);
++    int err = llm_http_call_with_config(post_data, llm_host,
++        vision_api_path(llm_host), "443", api_key, model, &rb, &status);
+     free(post_data);
+ 
+     if (err != OK) {
+@@ -244,7 +274,10 @@ int llm_chat_vision_raw(const char* prompt,
+     size_t b64_len = 0;
+     mbedtls_base64_encode(NULL, 0, &b64_len, raw_image, raw_len);
+ 
+-    const char* hdr_fmt = "{\"model\":\"%s\",\"%s\":%d,\"messages\":"
++    const char* thinking = is_mimo_request(llm_host, model)
++        ? "\"thinking\":{\"type\":\"disabled\"},"
++        : "";
++    const char* hdr_fmt = "{\"model\":\"%s\",\"%s\":%d,%s\"messages\":"
+                           "[{\"role\":\"user\",\"content\":["
+                           "{\"type\":\"text\",\"text\":\"%s\"},"
+                           "{\"type\":\"image_url\",\"image_url\":"
+@@ -252,7 +285,7 @@ int llm_chat_vision_raw(const char* prompt,
+     const char* trailer = "\"}}]}]}";
+ 
+     size_t hdr_max = strlen(hdr_fmt) + sizeof(model) + 32
+-        + strlen(tokens_key) + strlen(escaped_prompt)
++        + strlen(tokens_key) + strlen(thinking) + strlen(escaped_prompt)
+         + strlen(mime_type) + 64;
+     size_t total = hdr_max + b64_len + strlen(trailer) + 1;
+ 
+@@ -265,7 +298,7 @@ int llm_chat_vision_raw(const char* prompt,
+ 
+     int off = snprintf(body, total, hdr_fmt,
+         model_name_for_api(model, llm_host), tokens_key, max_tokens,
+-        escaped_prompt, mime_type);
++        thinking, escaped_prompt, mime_type);
+     free(escaped_prompt);
+ 
+     size_t written = 0;
+@@ -290,7 +323,8 @@ int llm_chat_vision_raw(const char* prompt,
+ 
+     resp_buf_t rb = { 0 };
+     int status = 0;
+-    int err = llm_http_call(body, &rb, &status);
++    int err = llm_http_call_with_config(body, llm_host,
++        vision_api_path(llm_host), "443", api_key, model, &rb, &status);
+     free(body);
+ 
+     if (err != OK) {
