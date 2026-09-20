@@ -213,7 +213,7 @@ Future<String> download(...) {
 
 **Claude**：HTTP 401 是认证失败。后端下载接口需要 Bearer Token 吗？
 
-**用户**：对，需要 Token。我找下配置文件……Token 是 `0a3a3873e84551cf78b2b59d3895b44fc39510d2dde64ad7`。
+**用户**：对，需要 Token。我找下配置文件……Token 是 `<后端随机生成的密钥，此处已脱敏>`。
 
 **Claude**：在 `device_client.dart` 加上：
 
@@ -221,7 +221,7 @@ Future<String> download(...) {
 
 ```dart
 class DeviceClient {
-  static const _apiToken = '0a3a3873e84551cf78b2b59d3895b44fc39510d2dde64ad7';
+  static const _apiToken = 'YOUR_BACKEND_API_TOKEN_HERE';
   
   Future<String> download(...) async {
     await _dio.download(

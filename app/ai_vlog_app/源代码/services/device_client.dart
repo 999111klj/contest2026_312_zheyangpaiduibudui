@@ -45,7 +45,8 @@ typedef DownloadProgress = void Function(double? progress);
 /// - GET  {base}/list                     → JSON 数组 [{"name":"x.mp4","size":123}]
 /// - GET  {base}/download?name=x.mp4       → mp4 文件流（需要 Bearer Token）
 class DeviceClient {
-  static const _apiToken = '0a3a3873e84551cf78b2b59d3895b44fc39510d2dde64ad7';
+  // 后端启动时会生成一个随机密钥，将其填入下方 _apiToken 常量中
+  static const _apiToken = 'YOUR_BACKEND_API_TOKEN_HERE';
   final Dio _dio;
 
   DeviceClient({Dio? dio}) : _dio = _buildDio(dio);
