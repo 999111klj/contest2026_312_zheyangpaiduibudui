@@ -72,8 +72,9 @@ git -C vendor/espressif apply contest2026_312_zheyangpaiduibudui/patches/vendor-
 ```
 
 **第二步（必须）**：应用 nuttx / apps fallback 补丁。本作品的驱动级修复已按比赛规则向公共仓
-`dev-ai-contest-2026` 分支提交 PR（nuttx PR：【待填链接】，SDMMC IDMAC 弹射缓冲、USB-CDC
-控制台防死锁、WiFi 静态 TX 缓冲、esp-hal spinlock 补丁等 16 文件；apps PR：【待填链接】，
+`dev-ai-contest-2026` 分支提交 PR（nuttx PR：https://github.com/open-vela/nuttx/pull/395 ，
+SDMMC IDMAC 弹射缓冲、USB-CDC 控制台防死锁、WiFi 静态 TX 缓冲、esp-hal spinlock 补丁等
+17 文件；apps PR：https://github.com/open-vela/nuttx-apps/pull/133 ，
 mbedtls `-isystem` 构建修复、wapi 密钥材料清理，2 文件）。由于 manifest 钉定的是提 PR 前的
 修订，**评委构建请始终应用**下列补丁（与 PR 是否合入无关）：
 
