@@ -1,4 +1,4 @@
-# AI Vlog App - AI Coding 日志
+﻿# AI Vlog App - AI Coding 日志
 
 本文档记录了与 Claude Code 开发 AI Vlog App 的完整对话历史。
 
@@ -83,7 +83,7 @@ Kotlin 1.9.24 有个警告（Flutter 未来版本会停止支持，需升到 2.1
 
 ## 第一轮联调：连接问题排查
 
-**用户**：手机安装了新 APK，但是输入 IP `10.192.225.229` 后报错连不上。
+**用户**：手机安装了新 APK，但是输入 IP `192.168.1.100` 后报错连不上。
 
 **Claude**：检查 device_client.dart 的 `normalizeBase` 函数。
 
@@ -149,7 +149,7 @@ static Dio _buildDio(Dio? override) {
       "session_id": "xxx",
       "name": "xxx.mp4",
       "title": "中文标题",
-      "url": "https://10.192.225.229/v1/aivlog/sessions/xxx/result.mp4"
+      "url": "https://192.168.1.100/v1/aivlog/sessions/xxx/result.mp4"
     }
   ]
 }
