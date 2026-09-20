@@ -21,7 +21,7 @@ index 711bb6d..7806ad4 100644
      "Please analyze this image in detail. If it contains text, tables, or " \
      "documents, extract and describe the content accurately."
 diff --git a/src/agent_main.c b/src/agent_main.c
-index 9d676c2..369cb26 100644
+index 9d676c2..00984f4 100644
 --- a/src/agent_main.c
 +++ b/src/agent_main.c
 @@ -77,11 +77,10 @@
@@ -38,7 +38,24 @@ index 9d676c2..369cb26 100644
  #endif
  
  static const char* TAG = "agent";
-@@ -643,22 +642,12 @@ int ai_agent_main(int argc, char* argv[])
+@@ -150,7 +149,15 @@ static void* network_watch_task(void* arg)
+     (void)arg;
+     syslog(LOG_INFO, "[%s] Network watcher started\n", TAG);
+ 
+-    network_wifi_reconnect();
++    /* Reconnecting unconditionally tears down a healthy association that
++     * the application (or a manual wapi sequence) already established.
++     * Only (re)connect when the link is actually down. */
++    if (network_is_connected()) {
++        syslog(LOG_INFO, "[%s] Already connected (%s), skip reconnect\n", TAG,
++            network_get_ip());
++    } else {
++        network_wifi_reconnect();
++    }
+ 
+     if (network_wait_connected(30000) == OK) {
+         syslog(LOG_INFO, "[%s] Network connected: %s\n", TAG, network_get_ip());
+@@ -643,22 +650,12 @@ int ai_agent_main(int argc, char* argv[])
      BOOT_LOG(&t0, "P5", "lvgl_ui_channel started");
  #endif
  
@@ -1420,7 +1437,7 @@ index 8327fff..88273ae 100644
  int config_del(const char *key);
  
 diff --git a/src/infra/network_manager.c b/src/infra/network_manager.c
-index 00cc296..fd4babe 100644
+index 00cc296..0b3b7d5 100644
 --- a/src/infra/network_manager.c
 +++ b/src/infra/network_manager.c
 @@ -30,9 +30,17 @@ static const char* TAG = "netmgr";
@@ -1461,7 +1478,7 @@ index 00cc296..fd4babe 100644
              inet_ntop(AF_INET, &sin->sin_addr, s_ip_str, sizeof(s_ip_str));
              syslog(LOG_INFO, "[%s] Found iface %s addr %s\n", TAG,
                  ifa->ifa_name ? ifa->ifa_name : "?", s_ip_str);
-@@ -766,43 +787,133 @@ int network_wifi_reconnect(void)
+@@ -766,139 +787,322 @@ int network_wifi_reconnect(void)
  }
  
  #else
@@ -1496,7 +1513,7 @@ index 00cc296..fd4babe 100644
 -        } else {
 -            if (out + 1 >= buf_size) return -1;
 -            buf[out++] = *p;
-+#define WIFI_ASSOC_RETRIES   20
++#define WIFI_ASSOC_RETRIES   30
 +#define WIFI_ASSOC_DELAY_US  500000
 +#define WIFI_DHCP_RETRIES    3
 +#define WIFI_DHCP_DELAY_US   1000000
@@ -1542,33 +1559,46 @@ index 00cc296..fd4babe 100644
 -int network_wifi_connect(const char* iface, const char* ssid,
 +static int network_wifi_configure_wapi(const char* dev, const char* ssid,
      const char* pass)
-+{
+ {
+-    if (!ssid || ssid[0] == '\0') {
+-        syslog(LOG_ERR, "[%s] wifi_connect: SSID required\n", TAG);
 +    size_t pass_len = pass ? strlen(pass) : 0;
 +    int sock;
 +    int ret;
 +
 +    if (strlen(ssid) > WAPI_ESSID_MAX_SIZE) {
 +        syslog(LOG_ERR, "[%s] WiFi SSID is too long\n", TAG);
-+        return ERROR;
-+    }
-+
+         return ERROR;
+     }
+ 
+-    const char* dev = (iface && iface[0]) ? iface : "wlan0";
+-    char cmd[512];
 +    if (pass_len < 8 || pass_len > 63) {
 +        syslog(LOG_ERR,
 +            "[%s] WPA2 password must contain 8 to 63 characters\n", TAG);
 +        return ERROR;
 +    }
-+
+ 
+-    /* P2: single-quote ssid/pass so spaces and shell metacharacters in
+-     * Wi-Fi credentials cannot break or inject into the wapi commands. */
+-    char q_ssid[192], q_pass[384];
+-    if (shell_quote(ssid, q_ssid, sizeof(q_ssid)) != 0) {
+-        syslog(LOG_ERR, "[%s] wifi_connect: SSID too long or unquotable\n", TAG);
 +    sock = socket(AF_INET, SOCK_DGRAM, 0);
 +    if (sock < 0) {
 +        syslog(LOG_ERR, "[%s] Cannot open WAPI socket: %d\n", TAG, errno);
-+        return ERROR;
-+    }
+         return ERROR;
+     }
+-    if (pass && pass[0] && shell_quote(pass, q_pass, sizeof(q_pass)) != 0) {
+-        syslog(LOG_ERR, "[%s] wifi_connect: PSK too long or unquotable\n", TAG);
 +
 +    ret = wapi_set_mode(sock, dev, WAPI_MODE_MANAGED);
 +    if (ret < 0) {
 +        syslog(LOG_ERR, "[%s] Set WiFi mode failed: %d\n", TAG, ret);
 +        goto out;
 +    }
++
++    usleep(300000); /* settle, matching the proven manual wapi rhythm */
 +
 +    /* ESP32-S3 defaults to regulatory domain 01, which rejects association
 +     * on channel 13 even though scans can see it.  The target phone hotspot
@@ -1579,6 +1609,8 @@ index 00cc296..fd4babe 100644
 +        goto out;
 +    }
 +
++    usleep(300000);
++
 +    ret = wpa_driver_wext_set_auth_param(sock, dev, IW_AUTH_WPA_VERSION,
 +        IW_AUTH_WPA_VERSION_WPA2);
 +    if (ret < 0) {
@@ -1587,6 +1619,8 @@ index 00cc296..fd4babe 100644
 +        goto out;
 +    }
 +
++    usleep(300000);
++
 +    ret = wpa_driver_wext_set_auth_param(sock, dev,
 +        IW_AUTH_CIPHER_PAIRWISE, IW_AUTH_CIPHER_CCMP);
 +    if (ret < 0) {
@@ -1594,12 +1628,16 @@ index 00cc296..fd4babe 100644
 +        goto out;
 +    }
 +
++    usleep(300000);
++
 +    ret = wpa_driver_wext_set_key_ext(sock, dev, WPA_ALG_CCMP,
 +        pass, pass_len);
 +    if (ret < 0) {
 +        syslog(LOG_ERR, "[%s] Set WPA2 password failed: %d\n", TAG, ret);
 +        goto out;
 +    }
++
++    usleep(300000);
 +
 +    /* Keep configuration and association as separate operations, matching
 +     * the board-proven manual WAPI sequence without exposing credentials to
@@ -1609,7 +1647,15 @@ index 00cc296..fd4babe 100644
 +    usleep(500000);
 +    ret = wapi_set_essid(sock, dev, ssid, WAPI_ESSID_ON);
 +    if (ret < 0) {
-+        syslog(LOG_ERR, "[%s] Associate with WiFi AP failed: %d\n", TAG, ret);
++        /* The ESP32-S3 driver's blocking connect call times out after 10 s
++         * while its internal retry loop is still working through the phone
++         * hotspot's transient AUTH_EXPIRE cycles; association routinely
++         * completes right after this call returns an error.  Do not treat
++         * the timeout as fatal — let wait_associated() poll the real
++         * association state. */
++        syslog(LOG_WARNING,
++            "[%s] essid set returned %d, waiting for association\n", TAG, ret);
++        ret = 0;
 +    }
 +
 +out:
@@ -1619,71 +1665,92 @@ index 00cc296..fd4babe 100644
 +
 +static int network_wifi_connect_internal(const char* iface,
 +    const char* ssid, const char* pass, bool persist)
- {
-     if (!ssid || ssid[0] == '\0') {
-         syslog(LOG_ERR, "[%s] wifi_connect: SSID required\n", TAG);
-@@ -810,95 +921,106 @@ int network_wifi_connect(const char* iface, const char* ssid,
-     }
- 
-     const char* dev = (iface && iface[0]) ? iface : "wlan0";
--    char cmd[512];
- 
--    /* P2: single-quote ssid/pass so spaces and shell metacharacters in
--     * Wi-Fi credentials cannot break or inject into the wapi commands. */
--    char q_ssid[192], q_pass[384];
--    if (shell_quote(ssid, q_ssid, sizeof(q_ssid)) != 0) {
--        syslog(LOG_ERR, "[%s] wifi_connect: SSID too long or unquotable\n", TAG);
-+    syslog(LOG_INFO, "[%s] Connecting WiFi on %s\n", TAG, dev);
-+
-+    if (netlib_ifup(dev) < 0) {
-+        syslog(LOG_ERR, "[%s] ifup %s failed: %d\n", TAG, dev, errno);
-         return ERROR;
-     }
--    if (pass && pass[0] && shell_quote(pass, q_pass, sizeof(q_pass)) != 0) {
--        syslog(LOG_ERR, "[%s] wifi_connect: PSK too long or unquotable\n", TAG);
-+
-+    usleep(500000); /* wait for driver ready */
-+
-+    if (network_wifi_configure_wapi(dev, ssid, pass) < 0) {
-+        syslog(LOG_ERR,
-+            "[%s] WiFi association timed out; check the password and "
-+            "use a 2.4 GHz WPA2 hotspot\n",
-+            TAG);
++{
++    if (!ssid || ssid[0] == '\0') {
++        syslog(LOG_ERR, "[%s] wifi_connect: SSID required\n", TAG);
          return ERROR;
      }
  
 -    syslog(LOG_INFO, "[%s] Connecting WiFi SSID=%s on %s\n", TAG, ssid, dev);
-+    if (network_wifi_wait_associated(dev) < 0) {
-+        return ERROR;
-+    }
++    const char* dev = (iface && iface[0]) ? iface : "wlan0";
  
 -    snprintf(cmd, sizeof(cmd), "ifup %s", dev); /* bring up iface first */
 -    system(cmd);
 -    usleep(500000); /* wait for driver ready */
-+    /* The station link event can precede readiness for DHCP traffic.
-+     * Allow the link to settle, then retry renew without reconnecting or
-+     * reapplying credentials.
-+     */
++    syslog(LOG_INFO, "[%s] Connecting WiFi on %s\n", TAG, dev);
  
 -    snprintf(cmd, sizeof(cmd), "wapi mode %s 2", dev); /* MANAGED */
 -    system(cmd);
--
++    /* Already associated with the requested SSID (e.g. the application's
++     * upload worker or a manual wapi sequence just established it): tearing
++     * the link down only to re-associate invites the hotspot's transient
++     * AUTH_EXPIRE cycles.  Keep the link and go straight to DHCP. */
++    {
++        char cur[WAPI_ESSID_MAX_SIZE + 1] = { 0 };
++        enum wapi_essid_flag_e fl = WAPI_ESSID_OFF;
++        int s = socket(AF_INET, SOCK_DGRAM, 0);
++        if (s >= 0) {
++            int g = wapi_get_essid(s, dev, cur, &fl);
++            close(s);
++            if (g >= 0 && fl == WAPI_ESSID_ON && strcmp(cur, ssid) == 0) {
++                syslog(LOG_INFO,
++                    "[%s] Already associated with %s, keeping link\n",
++                    TAG, ssid);
++                goto dhcp_and_persist;
++            }
++        }
++    }
+ 
 -    if (pass && pass[0]) {
 -        snprintf(cmd, sizeof(cmd), "wapi psk %s %s 3", dev, q_pass);
 -        system(cmd);
--    }
--
++    /* Bring the interface up only when it is actually down.  Re-asserting
++     * IFF_UP on an already-up ESP32-S3 wlan0 resets driver state (scan
++     * cache), sending every subsequent association attempt back to a cold
++     * start — the manual wapi sequence that connects reliably never calls
++     * ifup on an up interface. */
++    {
++        struct ifreq ifr;
++        int s = socket(AF_INET, SOCK_DGRAM, 0);
++        bool need_ifup = true;
++
++        if (s >= 0)
++          {
++            memset(&ifr, 0, sizeof(ifr));
++            strlcpy(ifr.ifr_name, dev, IFNAMSIZ);
++            if (ioctl(s, SIOCGIFFLAGS, (unsigned long)&ifr) >= 0 &&
++                (ifr.ifr_flags & IFF_UP))
++              {
++                need_ifup = false;
++              }
++
++            close(s);
++          }
++
++        if (need_ifup && netlib_ifup(dev) < 0)
++          {
++            syslog(LOG_ERR, "[%s] ifup %s failed: %d\n", TAG, dev, errno);
++            return ERROR;
++          }
+     }
+ 
 -    snprintf(cmd, sizeof(cmd), "wapi essid %s %s 1", dev, q_ssid);
 -    system(cmd);
 -    usleep(2000000); /* wait for AP association */
--
++    usleep(500000); /* wait for driver ready */
+ 
 -    /* P1: verify WiFi association before requesting DHCP.
 -     * 'wapi status' always exits 0 (it just prints iface state), so
 -     * checking its return code is useless. Instead, parse the output
 -     * for "Not-Associated" which wapi prints when no AP is joined.
 -     * If popen fails we fall through and let network_wait_connected
 -     * handle the timeout. */
--    {
++    /* The ESP32-S3 driver's internal retry loop stops after a handful of
++     * attempts (~4).  Phone hotspots routinely throw transient AUTH_EXPIRE
++     * cycles, so a single driver round is not enough: re-issue the wapi
++     * sequence (each round restarts the driver's attempt cycle) until the
++     * association lands or the outer budget is exhausted. */
+     {
 -        bool associated = true;
 -        snprintf(cmd, sizeof(cmd), "wapi status %s", dev);
 -        FILE* fp = popen(cmd, "r");
@@ -1694,15 +1761,44 @@ index 00cc296..fd4babe 100644
 -                    associated = false;
 -                    break;
 -                }
--            }
++        int assoc_rc = ERROR;
++        for (int round = 0; round < 4; round++) {
++            if (network_wifi_configure_wapi(dev, ssid, pass) < 0) {
++                syslog(LOG_ERR,
++                    "[%s] WiFi association timed out; check the password "
++                    "and use a 2.4 GHz WPA2 hotspot\n", TAG);
++                return ERROR;
++            }
++
++            assoc_rc = network_wifi_wait_associated(dev);
++            if (assoc_rc == OK) {
++                break;
+             }
 -            pclose(fp);
++
++            syslog(LOG_WARNING,
++                "[%s] association round %d/4 failed, retrying\n",
++                TAG, round + 1);
+         }
+-        if (!associated) {
++
++        if (assoc_rc != OK) {
++            return ERROR;
++        }
++    }
++
++dhcp_and_persist:
++    /* The station link event can precede readiness for DHCP traffic.
++     * Allow the link to settle, then retry renew without reconnecting or
++     * reapplying credentials.
++     */
++
 +    usleep(WIFI_DHCP_DELAY_US);
 +    for (int retry = 0; retry < WIFI_DHCP_RETRIES; retry++) {
 +        int dhcp_ret = netlib_obtain_ipv4addr(dev);
 +        if (dhcp_ret == OK) {
 +            break;
-         }
--        if (!associated) {
++        }
 +
 +        syslog(LOG_ERR,
 +            "[%s] DHCP attempt %d/%d failed: ret=%d errno=%d\n",
