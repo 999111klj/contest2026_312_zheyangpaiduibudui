@@ -30,6 +30,14 @@ app/camera_gallery/       # 端侧应用全部源码（经 manifest linkfile 软
   ├── camera_gallery_provision*.c  # 配网（本提交未启用 BLE 配网）
   ├── nima_exp4_int8.tflite        # NIMA int8 模型（309 KB）
   └── tools/receive_photo.py       # 辅助：经串口接收照片
+app/ai_vlog_app/         # 手机端 App（Flutter，仅 Android）：经 HTTP 轮询自动接收、
+                          # 管理与播放云端成片；自包含工程，可独立构建出 APK
+  ├── ai_vlog_app/                # Flutter 工程本体（lib/pages 四页面 +
+  │                               # lib/services 三服务：DeviceClient/VlogStore/SettingsStore）
+  ├── build_apk.bat / build_apk.ps1 # 一键构建脚本（零绝对路径，换机可复现 APK）
+  ├── 源代码/                     # lib 源码平铺（main.dart/pages/services，便于直接查阅）
+  ├── APK构建与部署流程.md        # 构建环境（Flutter 3.35.7 / JDK 17）与部署步骤
+  └── 项目说明.md / 核心代码速查.md / AI_Coding日志.md # 设计说明与代码导航
 third_party/esp-nn/       # espressif/esp-nn（TFLM Xtensa 优化内核；openvela
                           # manifest 未包含，随本仓提供，linkfile 到 apps/mlearning/esp-nn）
 cloud/aivlog_server/      # 云端服务（FastAPI + uvicorn，HTTPS 443 + Bearer 设备鉴权）
